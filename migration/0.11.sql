@@ -1,3 +1,4 @@
+DROP FUNCTION user_account_api.get_latest_reply_date(user_account_id uuid);
 CREATE FUNCTION user_account_api.get_latest_reply_date(user_account_id uuid) RETURNS timestamp
 LANGUAGE SQL AS $func$
 	SELECT MAX(reply.date_created) FROM comment reply

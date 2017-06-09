@@ -27,6 +27,7 @@ $objects = @(
     'core/tables/page'
     'core/tables/user_page'
     'core/tables/comment'
+	'core/tables/source_rule'
     'article_api/types/create_article_author'
     'article_api/types/user_article'
     'article_api/functions/list_user_articles'

@@ -1,4 +1,4 @@
-CREATE FUNCTION user_account_api.get_latest_unread_reply(user_account_id uuid) RETURNS SETOF article_api.user_comment
+CREATE OR REPLACE FUNCTION user_account_api.get_latest_unread_reply(user_account_id uuid) RETURNS SETOF article_api.user_comment
 LANGUAGE SQL AS $func$
 	SELECT reply.* FROM article_api.user_comment reply
 		JOIN comment parent ON reply.parent_comment_id = parent.id AND reply.user_account_id != parent.user_account_id

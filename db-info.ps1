@@ -18,6 +18,7 @@ $objects = @(
     'core/functions/utc_now'
     'core/tables/user_account'
     'core/tables/email_confirmation'
+    'core/tables/password_reset_request'
     'core/tables/source'
     'core/tables/article'
     'core/tables/author'

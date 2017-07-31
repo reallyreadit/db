@@ -1,4 +1,4 @@
-CREATE TYPE article_api.user_article AS (
+CREATE TYPE article_api.user_article_page_result AS (
 	id uuid,
 	title text,
 	slug text,
@@ -14,7 +14,11 @@ CREATE TYPE article_api.user_article AS (
 	word_count bigint,
 	readable_word_count bigint,
 	page_count bigint,
-	percent_complete numeric,
 	comment_count bigint,
-	date_created timestamp
+	latest_comment_date timestamp,
+	user_account_id uuid,
+	words_read bigint,
+	date_created timestamp,
+	date_starred timestamp,
+	total_count	bigint
 );

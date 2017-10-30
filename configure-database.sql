@@ -1,4 +1,5 @@
 CREATE SCHEMA article_api;
+CREATE SCHEMA bulk_mailing_api;
 CREATE SCHEMA core;
 CREATE SCHEMA pgcrypto;
 CREATE SCHEMA user_account_api;

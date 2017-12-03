@@ -14,6 +14,8 @@ LANGUAGE SQL AS $func$
 		date_modified,
 		section,
 		description,
+		aotd_timestamp,
+		score,
 		url,
 		authors,
 		tags,
@@ -22,16 +24,22 @@ LANGUAGE SQL AS $func$
 		page_count,
 		comment_count,
 		latest_comment_date,
+		read_count,
+		latest_read_date,
 		user_account_id,
 		words_read,
 		date_created,
+		last_modified,
+		percent_complete,
+		is_read,
 		date_starred,
 		count(*) OVER() AS total_count
 	FROM article_api.user_article
 	WHERE
 		user_account_id = list_user_hot_topics.user_account_id AND
-		comment_count > 0
-	ORDER BY latest_comment_date DESC
+		(comment_count > 0 OR read_count > 1) AND
+		(aotd_timestamp IS NULL OR aotd_timestamp != (SELECT max(aotd_timestamp) FROM article))
+	ORDER BY score DESC
 	OFFSET (page_number - 1) * page_size
 	LIMIT page_size;
 $func$;

@@ -13,6 +13,8 @@ LANGUAGE SQL AS $func$
 		date_modified,
 		section,
 		description,
+		aotd_timestamp,
+		score,
 		url,
 		authors,
 		tags,
@@ -21,9 +23,14 @@ LANGUAGE SQL AS $func$
 		page_count,
 		comment_count,
 		latest_comment_date,
+		read_count,
+		latest_read_date,
 		user_account_id,
 		words_read,
 		date_created,
+		last_modified,
+		percent_complete,
+		is_read,
 		date_starred
 	FROM article_api.user_article
 	WHERE

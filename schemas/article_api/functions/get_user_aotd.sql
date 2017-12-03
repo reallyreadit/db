@@ -1,5 +1,4 @@
-CREATE FUNCTION article_api.get_user_article(
-	article_id uuid,
+CREATE FUNCTION article_api.get_user_aotd(
 	user_account_id uuid
 ) RETURNS SETOF article_api.user_article
 LANGUAGE SQL AS $func$
@@ -34,6 +33,11 @@ LANGUAGE SQL AS $func$
 		date_starred
 	FROM article_api.user_article
 	WHERE
-		id = article_id AND
-		user_account_id = get_user_article.user_account_id;
+		id = (
+			SELECT id
+			FROM core.article
+			ORDER BY core.article.aotd_timestamp DESC NULLS LAST
+			LIMIT 1
+		) AND
+		user_account_id = get_user_aotd.user_account_id;
 $func$;

@@ -1,6 +1,5 @@
-CREATE FUNCTION article_api.find_article(
-	slug text
-) RETURNS SETOF article_api.article
+CREATE FUNCTION article_api.get_aotd()
+RETURNS SETOF article_api.article
 LANGUAGE SQL AS $func$
 	SELECT
 		id,
@@ -25,5 +24,10 @@ LANGUAGE SQL AS $func$
 		read_count,
 		latest_read_date
 	FROM article_api.article
-	WHERE slug = find_article.slug;
+	WHERE id = (
+		SELECT id
+		FROM core.article
+		ORDER BY core.article.aotd_timestamp DESC NULLS LAST
+		LIMIT 1
+	);
 $func$;

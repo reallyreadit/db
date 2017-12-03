@@ -8,6 +8,8 @@ CREATE TYPE article_api.article_page_result AS (
 	date_modified timestamp,
 	section text,
 	description text,
+	aotd_timestamp timestamp,
+	score int,
 	url text,
 	authors text[],
 	tags text[],
@@ -16,5 +18,7 @@ CREATE TYPE article_api.article_page_result AS (
 	page_count bigint,
 	comment_count bigint,
 	latest_comment_date timestamp,
+	read_count bigint,
+	latest_read_date timestamp,
 	total_count	bigint
 );

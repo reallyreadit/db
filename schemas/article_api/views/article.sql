@@ -1,4 +1,4 @@
-CREATE VIEW article_api.article AS
+CREATE VIEW article_api.article AS (
 	SELECT
 		article.id,
 		article.title,
@@ -9,27 +9,21 @@ CREATE VIEW article_api.article AS
 		article.date_modified,
 		article.section,
 		article.description,
-		pages.url,
+		article.aotd_timestamp,
+		article.score,
+		article_pages.urls[1] AS url,
 		coalesce(authors.names, '{}') AS authors,
 		coalesce(tags.names, '{}') AS tags,
-		pages.word_count,
-		pages.readable_word_count,
-		pages.page_count,
-		coalesce(comments.comment_count, 0) AS comment_count,
-		comments.latest_comment_date
+		article_pages.word_count,
+		article_pages.readable_word_count,
+		article_pages.count AS page_count,
+		coalesce(comments.count, 0) AS comment_count,
+		comments.latest_date AS latest_comment_date,
+		coalesce(reads.count, 0) AS read_count,
+		reads.latest_date AS latest_read_date
 	FROM
 		article
-		JOIN (
-			SELECT
-				url,
-				count(*) OVER article AS page_count,
-				sum(word_count) OVER article AS word_count,
-				sum(readable_word_count) OVER article AS readable_word_count,
-				article_id,
-				number = min(number) OVER article AS is_first_page
-			FROM page
-			WINDOW article AS (PARTITION BY article_id)
-		) AS pages ON pages.is_first_page AND pages.article_id = article.id
+		JOIN article_api.article_pages ON article_pages.article_id = article.id
 		JOIN source ON source.id = article.source_id
 		LEFT JOIN (
 			SELECT
@@ -51,20 +45,31 @@ CREATE VIEW article_api.article AS
 		) AS tags ON tags.article_id = article.id
 		LEFT JOIN (
 			SELECT
-				count(*) AS comment_count,
-				max(date_created) AS latest_comment_date,
+				count(*) AS count,
+				max(date_created) AS latest_date,
 				article_id
 			FROM comment
 			GROUP BY article_id
 		) AS comments ON comments.article_id = article.id
+		LEFT JOIN (
+			SELECT
+				count(*) AS count,
+				max(last_modified) AS latest_date,
+				article_id
+			FROM article_api.user_article_read
+			GROUP BY article_id
+		) AS reads ON reads.article_id = article.id
 	GROUP BY
 		article.id,
 		source.id,
-		pages.url,
-		pages.word_count,
-		pages.readable_word_count,
-		pages.page_count,
+		article_pages.urls,
+		article_pages.word_count,
+		article_pages.readable_word_count,
+		article_pages.count,
 		authors.names,
 		tags.names,
-		comments.comment_count,
-		comments.latest_comment_date;
+		comments.count,
+		comments.latest_date,
+		reads.count,
+		reads.latest_date
+);

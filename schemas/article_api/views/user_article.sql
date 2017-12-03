@@ -1,4 +1,4 @@
-CREATE VIEW article_api.user_article AS
+CREATE VIEW article_api.user_article AS (
 	SELECT
 		article.id,
 		article.title,
@@ -9,6 +9,8 @@ CREATE VIEW article_api.user_article AS
 		article.date_modified,
 		article.section,
 		article.description,
+		article.aotd_timestamp,
+		article.score,
 		article.url,
 		article.authors,
 		article.tags,
@@ -17,28 +19,21 @@ CREATE VIEW article_api.user_article AS
 		article.page_count,
 		article.comment_count,
 		article.latest_comment_date,
+		article.read_count,
+		article.latest_read_date,
 		user_account.id AS user_account_id,
-		coalesce(user_pages.words_read, 0) AS words_read,
-		user_pages.date_created,
+		coalesce(user_article_progress.words_read, 0) AS words_read,
+		user_article_progress.date_created,
+		user_article_progress.last_modified,
+		coalesce(user_article_progress.percent_complete, 0) AS percent_complete,
+		coalesce(user_article_progress.is_read, FALSE) AS is_read,
 		star.date_starred
 	FROM
 		article_api.article
 		CROSS JOIN user_account
-		LEFT JOIN (
-			SELECT
-				sum(user_page.words_read) AS words_read,
-				min(user_page.date_created) AS date_created,
-				user_page.user_account_id,
-				page.article_id
-			FROM
-				user_page
-				JOIN page ON page.id = user_page.page_id
-			GROUP BY
-				user_page.user_account_id,
-				page.article_id
-		) AS user_pages ON
-			user_pages.user_account_id = user_account.id AND
-			user_pages.article_id = article.id
+		LEFT JOIN article_api.user_article_progress ON
+			user_article_progress.user_account_id = user_account.id AND
+			user_article_progress.article_id = article.id
 		LEFT JOIN star ON
 			star.user_account_id = user_account.id AND
 			star.article_id = article.id
@@ -52,6 +47,8 @@ CREATE VIEW article_api.user_article AS
 		article.date_modified,
 		article.section,
 		article.description,
+		article.aotd_timestamp,
+		article.score,
 		article.url,
 		article.authors,
 		article.tags,
@@ -60,7 +57,13 @@ CREATE VIEW article_api.user_article AS
 		article.page_count,
 		article.comment_count,
 		article.latest_comment_date,
+		article.read_count,
+		article.latest_read_date,
 		user_account.id,
-		user_pages.words_read,
-		user_pages.date_created,
-		star.date_starred;
+		user_article_progress.words_read,
+		user_article_progress.date_created,
+		user_article_progress.last_modified,
+		user_article_progress.percent_complete,
+		user_article_progress.is_read,
+		star.date_starred
+);

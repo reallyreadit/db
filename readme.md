@@ -8,7 +8,9 @@
     psql --dbname=rrit --file=configure-database.sql --host=localhost --username=postgres
 5. Create the database objects
     .\create-database-objects.ps1
-6. Scheduled tasks
+6. Import source rules
+    psql --dbname=rrit --file=import-source-rules.sql --host=localhost --username=postgres
+7. Scheduled tasks
 The following functions are called periodically in production by a cron job:
     schemas\article_api\functions\score_articles.sql
     schemas\article_api\functions\set_aotd.sql

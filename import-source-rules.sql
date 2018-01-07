@@ -1,3 +1,4 @@
+INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('avc.com', '^/\d{4}/\d{2}/.+', 0, 'read');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('bimmerfest.com', '^/', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('bimmerfest.com', '^/news/.+', 1, 'default');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('centerforhealthandhealingnj.com', '^/', 0, 'ignore');

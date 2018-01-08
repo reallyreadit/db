@@ -4,6 +4,7 @@ INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('bimmerf
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('centerforhealthandhealingnj.com', '^/', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('coriginventures.com', '^/', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('crucial.com', '^/', 0, 'ignore');
+INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('dartmouthcoach.com', '^/', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('disposalnj.com', '^/', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('dumpstersoceancountynj.com', '^/', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('dumpstersondemand.com', '^/', 0, 'ignore');
@@ -61,8 +62,8 @@ INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('wikiwan
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('wunderground.com', '^/', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('wunderground.com', '^/(cat6|blog|news)/.+', 1, 'default');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('lecker.de', '^/weihnachten/adventskalender', 0, 'ignore');
-INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('netzwelt.de', '^/adventskalender', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('netzwelt.de', '^/$', 0, 'ignore');
+INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('netzwelt.de', '^/adventskalender', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('anea.es', '^/', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('moviesgolds.net', '^/', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('hosted.ap.org', '^/dynamic/stories/.+', 0, 'read');

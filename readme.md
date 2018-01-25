@@ -10,7 +10,10 @@
         psql --dbname=rrit --file=configure-database.sql --host=localhost --username=postgres
 5. Create the database objects
 
-        .\create-database-objects.ps1
+        PowerShell -File .\create-database-objects.ps1
+    
+    Note: This PowerShell script just enumerates the paths in the `database-objects` file
+    and runs `psql` passing the path as the value for the `--file` argument.
 6. Import source rules
 
         psql --dbname=rrit --file=import-source-rules.sql --host=localhost --username=postgres

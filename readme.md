@@ -23,3 +23,29 @@
 
         schemas\article_api\functions\score_articles.sql
         schemas\article_api\functions\set_aotd.sql
+## Data Import/Export
+Anonymized database dumps are located in the `dumps` directory.
+
+`*-dev.tar` dumps are created using the `anonymization\anonymize-dev.sql` script and are intended to provide
+developers with an anonymized set of user accounts, articles and comments for software testing purposes.
+
+Only articles that a user has publicly commented on remain in their reading history and all other private user-specific data is homoginized.
+
+The anonymization script sets every user account email address to `USERNAME@localhost` and every password to `password` so you can log in as
+any user.
+### Export
+
+        pg_dump --host=localhost --username=postgres --file=dumps\FILE-NAME.tar --format=tar --verbose rrit
+### Import
+1. Drop existing database if it exists
+
+        psql --command='DROP DATABASE rrit' --host=localhost --username=postgres
+2. Create the database
+
+        psql --file=create-database.sql --host=localhost --username=postgres
+3. Configure the database for restore operation
+
+        psql --dbname=rrit --file=configure-restore-database.sql --host=localhost --username=postgres
+4. Restore the database from the dump file
+
+        pg_restore --dbname=rrit --host=localhost --username=postgres --no-owner dumps\FILE-NAME.tar

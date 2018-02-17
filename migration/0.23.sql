@@ -1,4 +1,4 @@
-CREATE FUNCTION article_api.set_aotd() RETURNS void
+CREATE OR REPLACE FUNCTION article_api.set_aotd() RETURNS void
 LANGUAGE SQL AS $func$
 	UPDATE article
 	SET aotd_timestamp = utc_now()

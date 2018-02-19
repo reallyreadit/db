@@ -1,3 +1,4 @@
+INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('scout.ai', '^/story/.+', 0, 'read');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('avc.com', '^/\d{4}/\d{2}/.+', 0, 'read');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('bimmerfest.com', '^/', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('bimmerfest.com', '^/news/.+', 1, 'default');
@@ -38,6 +39,7 @@ INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('psychol
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('rawstory.com', '^/\d{4}/\d{2}/.+', 0, 'read');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('shelaf.com', '^/', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('shelaf.com', '^/\d{4}/\d{2}/', 1, 'default');
+INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('sixfigureinvesting.com', '^/\d{4}/\d{2}/.+', 0, 'read');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('socialcapital.com', '^/', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('spotifyjobs.com', '^/', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('stacieoverby.com', '^/', 0, 'ignore');
@@ -63,8 +65,8 @@ INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('wikiwan
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('wunderground.com', '^/', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('wunderground.com', '^/(cat6|blog|news)/.+', 1, 'default');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('lecker.de', '^/weihnachten/adventskalender', 0, 'ignore');
-INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('netzwelt.de', '^/$', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('netzwelt.de', '^/adventskalender', 0, 'ignore');
+INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('netzwelt.de', '^/$', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('anea.es', '^/', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('moviesgolds.net', '^/', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('hosted.ap.org', '^/dynamic/stories/.+', 0, 'read');
@@ -80,4 +82,5 @@ INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('theamer
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('untf.unwomen.org', '^/', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('untf.unwomen.org', '^/en/news-and-events/stories/\d{4}/\d{2}/', 1, 'default');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('todaypk.se', '^/', 0, 'ignore');
+INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('compassnews.co.uk', '^/', 0, 'ignore');
 INSERT INTO core.source_rule (hostname, path, priority, action) VALUES ('telegraph.co.uk', '^/[^/]+/$', 0, 'ignore');

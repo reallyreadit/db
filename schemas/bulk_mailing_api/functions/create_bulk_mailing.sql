@@ -13,7 +13,7 @@ BEGIN
 	INSERT INTO bulk_mailing (subject, body, list, user_account_id)
 		VALUES (subject, body, list, user_account_id)
 		RETURNING id INTO bulk_mailing_id;
-	FOR i IN 1..array_length(recipient_ids, 1) LOOP
+	FOR i IN 1..coalesce(array_length(recipient_ids, 1), 0) LOOP
 		INSERT INTO bulk_mailing_recipient (bulk_mailing_id, user_account_id, is_successful)
 			VALUES (bulk_mailing_id, recipient_ids[i], recipient_results[i]);
 	END LOOP;

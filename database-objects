@@ -11,7 +11,10 @@ schemas\core\tables\user_account.sql
 schemas\core\tables\bulk_mailing.sql
 schemas\core\tables\bulk_mailing_recipient.sql
 schemas\core\tables\comment.sql
+schemas\core\tables\email_bounce.sql
 schemas\core\tables\email_confirmation.sql
+schemas\core\tables\email_share.sql
+schemas\core\tables\email_share_recipient.sql
 schemas\core\tables\page.sql
 schemas\core\tables\password_reset_request.sql
 schemas\core\tables\source_rule.sql
@@ -30,6 +33,7 @@ schemas\article_api\views\user_article.sql
 schemas\article_api\views\user_comment.sql
 schemas\article_api\functions\create_article.sql
 schemas\article_api\functions\create_comment.sql
+schemas\article_api\functions\create_email_share.sql
 schemas\article_api\functions\create_page.sql
 schemas\article_api\functions\create_source.sql
 schemas\article_api\functions\create_user_page.sql
@@ -61,6 +65,7 @@ schemas\article_api\functions\update_user_page.sql
 schemas\bulk_mailing_api\types\create_bulk_mailing_recipient.sql
 schemas\bulk_mailing_api\functions\create_bulk_mailing.sql
 schemas\bulk_mailing_api\functions\list_bulk_mailings.sql
+schemas\bulk_mailing_api\functions\list_email_bounces.sql
 schemas\user_account_api\views\user_account.sql
 schemas\user_account_api\functions\ack_new_reply.sql
 schemas\user_account_api\functions\change_email_address.sql

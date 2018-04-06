@@ -21,7 +21,6 @@ schemas\core\tables\source_rule.sql
 schemas\core\tables\star.sql
 schemas\core\tables\user_page.sql
 schemas\article_api\types\article_page_result.sql
-schemas\article_api\types\create_article_author.sql
 schemas\article_api\types\user_article_page_result.sql
 schemas\article_api\types\user_comment_page_result.sql
 schemas\article_api\views\article_pages.sql
@@ -62,9 +61,9 @@ schemas\article_api\functions\set_aotd.sql
 schemas\article_api\functions\star_article.sql
 schemas\article_api\functions\unstar_article.sql
 schemas\article_api\functions\update_user_page.sql
-schemas\bulk_mailing_api\types\create_bulk_mailing_recipient.sql
 schemas\bulk_mailing_api\functions\create_bulk_mailing.sql
 schemas\bulk_mailing_api\functions\list_bulk_mailings.sql
+schemas\bulk_mailing_api\functions\list_confirmation_reminder_recipients.sql
 schemas\bulk_mailing_api\functions\list_email_bounces.sql
 schemas\user_account_api\views\user_account.sql
 schemas\user_account_api\functions\ack_new_reply.sql
@@ -83,6 +82,7 @@ schemas\user_account_api\functions\get_latest_unread_reply.sql
 schemas\user_account_api\functions\get_password_reset_request.sql
 schemas\user_account_api\functions\get_user_account.sql
 schemas\user_account_api\functions\is_email_address_confirmed.sql
+schemas\user_account_api\functions\list_email_confirmations.sql
 schemas\user_account_api\functions\list_user_accounts.sql
 schemas\user_account_api\functions\record_new_reply_desktop_notification.sql
 schemas\user_account_api\functions\update_contact_preferences.sql

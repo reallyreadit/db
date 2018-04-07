@@ -63,9 +63,9 @@ schemas\article_api\functions\unstar_article.sql
 schemas\article_api\functions\update_user_page.sql
 schemas\bulk_mailing_api\functions\create_bulk_mailing.sql
 schemas\bulk_mailing_api\functions\list_bulk_mailings.sql
+schemas\user_account_api\views\user_account.sql
 schemas\bulk_mailing_api\functions\list_confirmation_reminder_recipients.sql
 schemas\bulk_mailing_api\functions\list_email_bounces.sql
-schemas\user_account_api\views\user_account.sql
 schemas\user_account_api\functions\ack_new_reply.sql
 schemas\user_account_api\functions\change_email_address.sql
 schemas\user_account_api\functions\change_password.sql

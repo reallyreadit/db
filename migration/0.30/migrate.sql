@@ -1,4 +1,4 @@
-CREATE FUNCTION article_api.create_email_share(
+CREATE OR REPLACE FUNCTION article_api.create_email_share(
 	date_sent timestamp,
 	article_id bigint,
 	user_account_id bigint,

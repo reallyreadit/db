@@ -17,6 +17,9 @@ Write-Host "Dropping $($type): $name...";
 # create and execute command
 $command
 switch ($type) {
+    'domain' {
+        $command = "DROP DOMAIN IF EXISTS $schema.$name"
+    }
     { 'enum','type' -contains $type } {
         $command = "DROP TYPE IF EXISTS $schema.$name"
     }

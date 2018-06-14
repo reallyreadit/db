@@ -82,6 +82,7 @@ schemas\bulk_mailing_api\functions\list_email_bounces.sql
 schemas\challenge_api\views\challenge_response.sql
 schemas\challenge_api\functions\create_challenge_response.sql
 schemas\challenge_api\views\latest_challenge_response.sql
+schemas\challenge_api\views\challenge_contender.sql
 schemas\challenge_api\functions\get_challenge_contenders.sql
 schemas\challenge_api\functions\get_challenge_response_action_totals.sql
 schemas\challenge_api\functions\get_challenge_winners.sql

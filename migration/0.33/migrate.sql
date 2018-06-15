@@ -1,3 +1,7 @@
+DROP FUNCTION challenge_api.get_challenge_winners(
+	challenge_id bigint
+);
+
 CREATE FUNCTION challenge_api.get_challenge_winners(
 	challenge_id bigint
 )

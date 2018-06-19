@@ -1,4 +1,4 @@
-CREATE FUNCTION challenge_api.get_challenge_winners(
+CREATE OR REPLACE FUNCTION challenge_api.get_challenge_winners(
 	challenge_id bigint
 )
 RETURNS TABLE (

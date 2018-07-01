@@ -25,3 +25,5 @@ FROM
 	JOIN LATERAL challenge_api.get_challenge_score(c.challenge_id, ua.id) score ON TRUE
 WHERE score.day > 0
 ORDER BY score.level DESC, score.day, ua.name;
+CREATE UNIQUE INDEX challenge_contender_challenge_id_name_key ON
+	challenge_api.challenge_contender (challenge_id, name);

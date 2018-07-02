@@ -87,6 +87,7 @@ schemas\challenge_api\functions\get_challenge_contenders.sql
 schemas\challenge_api\functions\get_challenge_response_action_totals.sql
 schemas\challenge_api\functions\get_challenge_winners.sql
 schemas\challenge_api\functions\get_latest_challenge_response.sql
+schemas\id_migration\tables\user_account.sql
 schemas\user_account_api\functions\ack_new_reply.sql
 schemas\user_account_api\functions\change_email_address.sql
 schemas\user_account_api\functions\change_password.sql

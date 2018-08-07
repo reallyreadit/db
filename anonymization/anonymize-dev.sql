@@ -5,8 +5,16 @@ DELETE FROM email_bounce;
 DELETE FROM bulk_mailing_recipient;
 ---- drop all bulk_mailings
 DELETE FROM bulk_mailing;
+---- drop all challenge_responses
+DELETE FROM challenge_response;
+---- drop all challenge_awards
+DELETE FROM challenge_award;
 ---- drop all email_confirmations
 DELETE FROM email_confirmation;
+-- drop all email_share_recipients
+DELETE FROM email_share_recipient;
+-- drop all email_shares
+DELETE FROM email_share;
 ---- drop all password_reset_requests
 DELETE FROM password_reset_request;
 
@@ -36,7 +44,8 @@ SET
 	date_created = '1970-01-01T00:00:00',
 	last_modified = '1970-01-01T00:00:00',
 	read_state = array((SELECT sum(abs(n)) FROM unnest(read_state) AS n)),
-	words_read = (SELECT sum(abs(n)) FROM unnest(read_state) AS n);
+	words_read = (SELECT sum(abs(n)) FROM unnest(read_state) AS n),
+	date_completed = '1970-01-01T00:00:00';
 ---- drop all pages without user_pages
 DELETE
 FROM page
@@ -108,51 +117,6 @@ WHERE id IN (
 );
 
 -- anonymize user_accounts
----- change ids
------- create new ids
-CREATE TEMP TABLE user_account_ids AS (
-	SELECT
-		id,
-		pgcrypto.gen_random_uuid() AS new_id
-	FROM user_account
-);
------- change comment foreign key to cascade on update
-ALTER TABLE comment
-DROP CONSTRAINT comment_user_account_id_fkey;
-ALTER TABLE comment
-ADD CONSTRAINT comment_user_account_id_fkey
-	FOREIGN KEY (user_account_id)
-	REFERENCES user_account
-	ON UPDATE CASCADE;
------- change user_page foreign key to cascade on update
-ALTER TABLE user_page
-DROP CONSTRAINT user_page_user_account_id_fkey;
-ALTER TABLE user_page
-ADD CONSTRAINT user_page_user_account_id_fkey
-	FOREIGN KEY (user_account_id)
-	REFERENCES user_account
-	ON UPDATE CASCADE;
------- set new id
-UPDATE user_account
-SET id = (
-	SELECT new_id
-	FROM user_account_ids
-	WHERE id = user_account.id
-);
------- revert comment foreign key to no action on update
-ALTER TABLE comment
-DROP CONSTRAINT comment_user_account_id_fkey;
-ALTER TABLE comment
-ADD CONSTRAINT comment_user_account_id_fkey
-	FOREIGN KEY (user_account_id)
-	REFERENCES user_account;
------- revert user_page foreign key to no action on update
-ALTER TABLE user_page
-DROP CONSTRAINT user_page_user_account_id_fkey;
-ALTER TABLE user_page
-ADD CONSTRAINT user_page_user_account_id_fkey
-	FOREIGN KEY (user_account_id)
-	REFERENCES user_account;
 ---- set email
 UPDATE user_account
 SET email = name || '@localhost';
@@ -179,11 +143,13 @@ SET date_created = '1970-01-01T00:00:00';
 ---- set role
 UPDATE user_account
 SET role = 'regular';
+---- set time_zone_id
+UPDATE user_account
+SET time_zone_id = NULL;
 ---- confirm email addresses
 INSERT INTO email_confirmation
-	(id, date_created, user_account_id, email_address, date_confirmed)
+	(date_created, user_account_id, email_address, date_confirmed)
 SELECT
-	pgcrypto.gen_random_uuid(),
 	'1970-01-01T00:00:00',
 	id,
 	email,

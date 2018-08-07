@@ -21,8 +21,9 @@
 
     The following functions are called periodically in production by a cron job:
 
-        schemas\article_api\functions\score_articles.sql
-        schemas\article_api\functions\set_aotd.sql
+        SELECT article_api.score_articles()
+        SELECT article_api.set_aotd()
+        REFRESH MATERIALIZED VIEW CONCURRENTLY challenge_api.challenge_contender
 ## Data Import/Export
 Anonymized database dumps are located in the `dumps` directory.
 
@@ -49,3 +50,7 @@ any user.
 4. Restore the database from the dump file
 
         pg_restore --dbname=rrit --host=localhost --username=postgres --no-owner dumps\FILE-NAME.tar
+    Refreshing challenge_api.challenge_contender may fail with an error. It will be fixed in the next step.
+5. Refresh the materalized view
+
+        psql --dbname=rrit --command='REFRESH MATERIALIZED VIEW CONCURRENTLY challenge_api.challenge_contender' --host=localhost --username=postgres

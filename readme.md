@@ -52,4 +52,4 @@ any user.
     Refreshing challenge_api.challenge_contender may fail with an error. It will be fixed in the next step.
 5. Refresh the materalized view
 
-        psql --dbname=rrit --command='REFRESH MATERIALIZED VIEW CONCURRENTLY challenge_api.challenge_contender'
+        psql --dbname=rrit --command='REFRESH MATERIALIZED VIEW challenge_api.challenge_contender'

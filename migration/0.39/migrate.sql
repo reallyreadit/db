@@ -1,0 +1,1 @@
+DROP FUNCTION article_api.delete_article(id bigint);

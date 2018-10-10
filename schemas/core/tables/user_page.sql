@@ -8,3 +8,4 @@ CREATE TABLE user_page (
 	words_read		int			NOT NULL	DEFAULT 0,
 	date_completed	timestamp
 );
+CREATE INDEX user_page_page_id_idx ON user_page(page_id);

@@ -31,6 +31,13 @@ switch ($type) {
         $decl = $decl.Groups[1].Value -replace '\s+DEFAULT\s+[^\s,)]+',''
         $command = "DROP FUNCTION IF EXISTS $decl"
     }
+	'materialized-view' {
+        $decl = [System.Text.RegularExpressions.Regex]::Match(
+            (Get-Content $Object),
+            '^CREATE\s+MATERIALIZED\s+VIEW\s+(\S+)'
+        )
+        $command = "DROP MATERIALIZED VIEW IF EXISTS $($decl.Groups[1].Value)"
+    }
     'table' {
         $command = "DROP TABLE IF EXISTS $schema.$name"
     }

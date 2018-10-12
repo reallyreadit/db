@@ -1,0 +1,20 @@
+CREATE TYPE article_api.user_article AS (
+	id bigint,
+	title text,
+	slug text,
+	source text,
+	date_published timestamp,
+	section text,
+	description text,
+	aotd_timestamp timestamp,
+	url text,
+	authors text[],
+	tags text[],
+	word_count bigint,
+	comment_count bigint,
+	read_count bigint,
+	date_created timestamp,
+	percent_complete double precision,
+	is_read boolean,
+	date_starred timestamp
+);

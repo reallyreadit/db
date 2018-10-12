@@ -1,0 +1,1 @@
+CREATE TYPE challenge_response_action AS ENUM ('enroll', 'decline', 'disenroll');

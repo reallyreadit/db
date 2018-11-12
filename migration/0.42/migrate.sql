@@ -1,4 +1,4 @@
-CREATE FUNCTION article_api.list_user_article_history(
+CREATE OR REPLACE FUNCTION article_api.list_user_article_history(
 	user_account_id bigint,
 	page_number int,
 	page_size int

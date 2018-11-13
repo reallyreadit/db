@@ -1,4 +1,4 @@
-CREATE FUNCTION stats_api.get_weekly_read_count_leaderboard(
+CREATE FUNCTION stats_api.get_read_count_leaderboard(
 	max_count int
 )
 RETURNS TABLE (
@@ -15,11 +15,11 @@ AS $func$
 		user_page
 		JOIN user_account ON user_page.user_account_id = user_account.id
 	WHERE
-		user_page.date_completed > (utc_now() - '1 week'::interval)
+		user_page.date_completed IS NOT NULL
 	GROUP BY
 		user_account.id
 	ORDER BY
 		read_count DESC
 	LIMIT
-		get_weekly_read_count_leaderboard.max_count;
+		get_read_count_leaderboard.max_count;
 $func$;

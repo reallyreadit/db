@@ -1,8 +1,9 @@
 CREATE FUNCTION user_account_api.create_user_account(
-	name 			text,
-	email 			text,
-	password_hash	bytea,
-	password_salt	bytea
+	name text,
+	email text,
+	password_hash bytea,
+	password_salt bytea,
+	time_zone_id bigint
 )
 RETURNS SETOF user_account_api.user_account
 LANGUAGE plpgsql
@@ -10,8 +11,8 @@ AS $func$
 DECLARE
 	user_account_id bigint;
 BEGIN
-	INSERT INTO user_account (name, email, password_hash, password_salt)
-		VALUES (trim(name), trim(email), password_hash, password_salt)
+	INSERT INTO user_account (name, email, password_hash, password_salt, time_zone_id)
+		VALUES (trim(name), trim(email), password_hash, password_salt, time_zone_id)
 		RETURNING id INTO user_account_id;
 	RETURN QUERY
 	SELECT *

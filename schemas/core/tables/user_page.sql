@@ -10,3 +10,4 @@ CREATE TABLE user_page (
 );
 CREATE INDEX user_page_page_id_idx ON user_page (page_id);
 CREATE INDEX user_page_date_completed_idx ON user_page (date_completed);
+CREATE INDEX user_page_user_account_id_idx ON user_page (user_account_id);

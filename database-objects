@@ -93,9 +93,11 @@ schemas/challenge_api/functions/get_challenge_contenders.sql
 schemas/challenge_api/functions/get_challenge_response_action_totals.sql
 schemas/challenge_api/functions/get_challenge_winners.sql
 schemas/challenge_api/functions/get_latest_challenge_response.sql
-schemas/stats_api/functions/get_user_weekly_read_stats.sql
-schemas/stats_api/functions/get_weekly_read_count_leaderboard.sql
-schemas/stats_api/functions/get_weekly_word_count_leaderboard.sql
+schemas/stats_api/functions/get_current_streak.sql
+schemas/stats_api/materialized-views/current_streak.sql
+schemas/stats_api/functions/get_current_streak_leaderboard.sql
+schemas/stats_api/functions/get_read_count_leaderboard.sql
+schemas/stats_api/functions/get_user_stats.sql
 schemas/user_account_api/functions/ack_new_reply.sql
 schemas/user_account_api/functions/change_email_address.sql
 schemas/user_account_api/functions/change_password.sql

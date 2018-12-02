@@ -9,3 +9,5 @@ FROM
 		ON user_account.time_zone_id IS NOT NULL
 WHERE
 	streak > 0;
+CREATE UNIQUE INDEX current_streak_id_key ON
+	stats_api.current_streak (id);

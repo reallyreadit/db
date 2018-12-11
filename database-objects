@@ -22,8 +22,8 @@ schemas/core/tables/challenge.sql
 schemas/core/tables/challenge_award.sql
 schemas/core/tables/challenge_response.sql
 schemas/core/tables/comment.sql
-schemas/core/tables/email_bounce.sql
 schemas/core/tables/email_confirmation.sql
+schemas/core/tables/email_notification.sql
 schemas/core/tables/email_share.sql
 schemas/core/tables/email_share_recipient.sql
 schemas/core/tables/page.sql
@@ -82,10 +82,11 @@ schemas/challenge_api/functions/get_active_challenges.sql
 schemas/challenge_api/functions/get_challenge_score.sql
 schemas/article_api/functions/update_user_page.sql
 schemas/bulk_mailing_api/functions/create_bulk_mailing.sql
+schemas/bulk_mailing_api/functions/create_email_notification.sql
+schemas/bulk_mailing_api/functions/get_blocked_email_addresses.sql
 schemas/bulk_mailing_api/functions/list_bulk_mailings.sql
 schemas/user_account_api/views/user_account.sql
 schemas/bulk_mailing_api/functions/list_confirmation_reminder_recipients.sql
-schemas/bulk_mailing_api/functions/list_email_bounces.sql
 schemas/challenge_api/views/challenge_response.sql
 schemas/challenge_api/functions/create_challenge_response.sql
 schemas/challenge_api/views/latest_challenge_response.sql

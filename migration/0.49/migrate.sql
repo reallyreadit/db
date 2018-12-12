@@ -1,4 +1,4 @@
-CREATE FUNCTION stats_api.get_current_streak(
+CREATE OR REPLACE FUNCTION stats_api.get_current_streak(
 	user_account_id bigint
 )
 RETURNS bigint

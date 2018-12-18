@@ -60,6 +60,7 @@ schemas/article_api/functions/get_percent_complete.sql
 schemas/article_api/functions/get_user_articles.sql
 schemas/article_api/functions/find_user_article.sql
 schemas/article_api/functions/get_aotd.sql
+schemas/article_api/functions/get_article.sql
 schemas/article_api/functions/get_comment.sql
 schemas/article_api/functions/get_page.sql
 schemas/article_api/functions/get_source_rules.sql

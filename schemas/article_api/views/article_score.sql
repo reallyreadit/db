@@ -7,7 +7,14 @@ SELECT
 			(coalesce(reads.score, 0) * greatest(1, (article_pages.word_count::double precision / 184) / 5))::int
 		)
 		ELSE 0
-	END AS score
+	END AS hot_score,
+   CASE WHEN (comments.count > 0 OR reads.count > 1) THEN
+	(
+		coalesce(comments.count, 0) +
+		(coalesce(reads.count, 0) * greatest(1, (article_pages.word_count::double precision / 184) / 5))::int
+	)
+	ELSE 0
+	END AS top_score
 FROM
 	article_api.article_pages
 	LEFT JOIN (

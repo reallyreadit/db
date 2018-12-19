@@ -8,7 +8,9 @@ CREATE TABLE article (
 	section			varchar(256),
 	description		text,
 	aotd_timestamp	timestamp,
-	score			int				NOT NULL 	DEFAULT 0
+	hot_score		int				NOT NULL 	DEFAULT 0,
+	top_score		int				NOT NULL 	DEFAULT 0
 );
 CREATE INDEX article_aotd_timestamp_idx ON article (aotd_timestamp DESC NULLS LAST);
-CREATE INDEX article_score_idx ON article (score DESC);
+CREATE INDEX article_hot_score_idx ON article (hot_score DESC);
+CREATE INDEX article_top_score_idx ON article (top_score DESC);

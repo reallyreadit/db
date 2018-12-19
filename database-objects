@@ -43,7 +43,7 @@ schemas/article_api/views/user_article_pages.sql
 schemas/article_api/views/article_read_count.sql
 schemas/article_api/views/article_score.sql
 schemas/article_api/views/article_tags.sql
-schemas/article_api/views/hot_topic.sql
+schemas/article_api/views/community_read.sql
 schemas/article_api/views/user_comment.sql
 schemas/article_api/functions/create_article.sql
 schemas/article_api/functions/create_comment.sql
@@ -68,11 +68,11 @@ schemas/article_api/functions/get_user_aotd.sql
 schemas/article_api/functions/get_user_article.sql
 schemas/article_api/functions/get_user_page.sql
 schemas/article_api/functions/list_comments.sql
-schemas/article_api/functions/list_hot_topics.sql
+schemas/article_api/functions/list_community_reads.sql
 schemas/article_api/functions/list_replies.sql
 schemas/article_api/functions/list_starred_articles.sql
 schemas/article_api/functions/list_user_article_history.sql
-schemas/article_api/functions/list_user_hot_topics.sql
+schemas/article_api/functions/list_user_community_reads.sql
 schemas/article_api/functions/read_comment.sql
 schemas/article_api/functions/score_articles.sql
 schemas/article_api/functions/set_aotd.sql

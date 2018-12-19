@@ -12,8 +12,8 @@ AS $func$
 		WHERE
 			aotd_timestamp IS NULL AND
 			word_count >= (184 * 5) AND
-			score > 0
-		ORDER BY score DESC
+			hot_score > 0
+		ORDER BY hot_score DESC
 		LIMIT 1
 	);
 $func$;

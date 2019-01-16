@@ -1,4 +1,4 @@
-CREATE FUNCTION article_api.star_article(
+CREATE OR REPLACE FUNCTION article_api.star_article(
 	user_account_id bigint,
 	article_id bigint
 ) RETURNS void

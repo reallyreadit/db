@@ -6,7 +6,7 @@
 )
 
 # get object info
-$objectParts = $Object.Split('\')
+$objectParts = $Object.Split('/')
 $schema = $objectParts[1]
 $type = $objectParts[2].TrimEnd('s')
 $name = $objectParts[3].Substring(0, $objectParts[3].IndexOf('.sql'))

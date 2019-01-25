@@ -1,0 +1,1 @@
+CREATE TYPE user_account_role AS ENUM ('regular', 'admin');

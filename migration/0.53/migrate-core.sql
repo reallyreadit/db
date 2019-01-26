@@ -5,9 +5,7 @@ ADD COLUMN readable_word_count int;
 UPDATE user_page
 SET
 	readable_word_count = (
-   	SELECT readable_word_count
-	   FROM page
-	   WHERE page.id = user_page.page_id
+		SELECT sum(abs(n)) FROM unnest(read_state) AS n
 	);
 
 ALTER TABLE user_page

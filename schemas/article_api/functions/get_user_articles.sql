@@ -1,11 +1,11 @@
-CREATE FUNCTION article_api.get_user_articles(
+CREATE OR REPLACE FUNCTION article_api.get_user_articles(
 	user_account_id bigint,
 	VARIADIC article_ids bigint[]
 )
 RETURNS SETOF article_api.user_article
 LANGUAGE SQL
 STABLE
-AS $func$
+AS $$
 	SELECT
 		article.id,
 		article.title,
@@ -33,7 +33,8 @@ AS $func$
 		   user_article_pages.date_completed IS NOT NULL,
 		   FALSE
 		) AS is_read,
-		star.date_starred
+		star.date_starred,
+	   latest_rating.score AS rating_score
 	FROM
 		article
 		JOIN article_api.article_pages ON (
@@ -66,5 +67,24 @@ AS $func$
 			star.user_account_id = get_user_articles.user_account_id AND
 			star.article_id = article.id
 		)
+		LEFT JOIN (
+			SELECT
+				rating.article_id,
+				rating.score
+			FROM
+				rating
+				LEFT JOIN rating AS more_recent_rating
+					ON (
+						rating.article_id = more_recent_rating.article_id AND
+						rating.user_account_id = more_recent_rating.user_account_id AND
+						rating.timestamp < more_recent_rating.timestamp
+					)
+			WHERE
+				rating.user_account_id = get_user_articles.user_account_id AND
+			   rating.article_id = ANY (article_ids) AND
+				more_recent_rating.id IS NULL
+		) AS latest_rating ON (
+			article.id = latest_rating.article_id
+		)
 	ORDER BY array_position(article_ids, article.id)
-$func$;
+$$;

@@ -1,10 +1,10 @@
-CREATE FUNCTION article_api.get_articles(
+CREATE OR REPLACE FUNCTION article_api.get_articles(
 	VARIADIC article_ids bigint[]
 )
 RETURNS SETOF article_api.article
 LANGUAGE SQL
 STABLE
-AS $func$
+AS $$
 	SELECT
 		article.id,
 		article.title,
@@ -19,7 +19,8 @@ AS $func$
 		coalesce(article_tags.names, '{}') AS tags,
 		article_pages.word_count,
 		coalesce(article_comment_count.count, 0) AS comment_count,
-		coalesce(article_read_count.count, 0) AS read_count
+		coalesce(article_read_count.count, 0) AS read_count,
+	   average_article_rating.score AS average_rating_score
 	FROM
 		article
 		JOIN article_api.article_pages ON (
@@ -43,5 +44,9 @@ AS $func$
 			article_read_count.article_id = article.id AND
 			article_read_count.article_id = ANY (article_ids)
 		)
+		LEFT JOIN article_api.average_article_rating ON (
+			average_article_rating.article_id = article.id AND
+			average_article_rating.article_id = ANY (article_ids)
+		)
 	ORDER BY array_position(article_ids, article.id)
-$func$;
+$$;

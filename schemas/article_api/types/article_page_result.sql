@@ -13,5 +13,6 @@ CREATE TYPE article_api.article_page_result AS (
 	word_count bigint,
 	comment_count bigint,
 	read_count bigint,
+   average_rating_score numeric,
 	total_count	bigint
 );

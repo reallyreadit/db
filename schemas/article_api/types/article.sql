@@ -12,5 +12,6 @@ CREATE TYPE article_api.article AS (
 	tags text[],
 	word_count bigint,
 	comment_count bigint,
-	read_count bigint
+	read_count bigint,
+   average_rating_score numeric
 );

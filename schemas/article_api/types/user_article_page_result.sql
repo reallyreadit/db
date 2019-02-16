@@ -17,6 +17,7 @@ CREATE TYPE article_api.user_article_page_result AS (
 	percent_complete double precision,
 	is_read boolean,
 	date_starred timestamp,
+   average_rating_score numeric,
    rating_score rating_score,
 	total_count	bigint
 );

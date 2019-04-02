@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
--- Dumped from database version 9.6.11
+-- Dumped from database version 9.6.8
 -- Dumped by pg_dump version 11.2
 
 SET statement_timeout = 0;
@@ -51,53 +51,6 @@ CREATE SCHEMA user_account_api;
 
 
 --
--- Name: article; Type: TYPE; Schema: article_api; Owner: -
---
-
-CREATE TYPE article_api.article AS (
-	id bigint,
-	title text,
-	slug text,
-	source text,
-	date_published timestamp without time zone,
-	section text,
-	description text,
-	aotd_timestamp timestamp without time zone,
-	url text,
-	authors text[],
-	tags text[],
-	word_count bigint,
-	comment_count bigint,
-	read_count bigint,
-	average_rating_score numeric
-);
-
-
---
--- Name: article_page_result; Type: TYPE; Schema: article_api; Owner: -
---
-
-CREATE TYPE article_api.article_page_result AS (
-	id bigint,
-	title text,
-	slug text,
-	source text,
-	date_published timestamp without time zone,
-	section text,
-	description text,
-	aotd_timestamp timestamp without time zone,
-	url text,
-	authors text[],
-	tags text[],
-	word_count bigint,
-	comment_count bigint,
-	read_count bigint,
-	average_rating_score numeric,
-	total_count bigint
-);
-
-
---
 -- Name: rating_score; Type: DOMAIN; Schema: core; Owner: -
 --
 
@@ -106,10 +59,10 @@ CREATE DOMAIN core.rating_score AS integer
 
 
 --
--- Name: user_article; Type: TYPE; Schema: article_api; Owner: -
+-- Name: article; Type: TYPE; Schema: article_api; Owner: -
 --
 
-CREATE TYPE article_api.user_article AS (
+CREATE TYPE article_api.article AS (
 	id bigint,
 	title text,
 	slug text,
@@ -134,10 +87,10 @@ CREATE TYPE article_api.user_article AS (
 
 
 --
--- Name: user_article_page_result; Type: TYPE; Schema: article_api; Owner: -
+-- Name: article_page_result; Type: TYPE; Schema: article_api; Owner: -
 --
 
-CREATE TYPE article_api.user_article_page_result AS (
+CREATE TYPE article_api.article_page_result AS (
 	id bigint,
 	title text,
 	slug text,
@@ -479,14 +432,20 @@ $$;
 
 
 --
--- Name: find_article(text); Type: FUNCTION; Schema: article_api; Owner: -
+-- Name: find_article(text, bigint); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
-CREATE FUNCTION article_api.find_article(slug text) RETURNS SETOF article_api.article
+CREATE FUNCTION article_api.find_article(slug text, user_account_id bigint) RETURNS SETOF article_api.article
     LANGUAGE sql STABLE
     AS $$
-	SELECT * FROM article_api.get_articles(
-		(SELECT id FROM article WHERE slug = find_article.slug)
+	SELECT *
+	FROM article_api.get_articles(
+		user_account_id,
+		(
+		   SELECT id
+		   FROM article
+		   WHERE slug = find_article.slug
+		)
 	);
 $$;
 
@@ -514,27 +473,15 @@ $$;
 
 
 --
--- Name: find_user_article(text, bigint); Type: FUNCTION; Schema: article_api; Owner: -
+-- Name: get_aotd(bigint); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
-CREATE FUNCTION article_api.find_user_article(slug text, user_account_id bigint) RETURNS SETOF article_api.user_article
+CREATE FUNCTION article_api.get_aotd(user_account_id bigint) RETURNS SETOF article_api.article
     LANGUAGE sql STABLE
     AS $$
-	SELECT * FROM article_api.get_user_articles(
+	SELECT *
+	FROM article_api.get_articles(
 		user_account_id,
-		(SELECT id FROM article WHERE slug = find_user_article.slug)
-	);
-$$;
-
-
---
--- Name: get_aotd(); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.get_aotd() RETURNS SETOF article_api.article
-    LANGUAGE sql STABLE
-    AS $$
-	SELECT * FROM article_api.get_articles(
 		(
 			SELECT id
 			FROM article
@@ -546,173 +493,69 @@ $$;
 
 
 --
--- Name: get_article(bigint); Type: FUNCTION; Schema: article_api; Owner: -
+-- Name: get_article(bigint, bigint); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
-CREATE FUNCTION article_api.get_article(article_id bigint) RETURNS SETOF article_api.article
+CREATE FUNCTION article_api.get_article(article_id bigint, user_account_id bigint) RETURNS SETOF article_api.article
     LANGUAGE sql STABLE
     AS $$
-	SELECT * FROM article_api.get_articles(
+	SELECT *
+	FROM article_api.get_articles(
+		user_account_id,
 		article_id
 	);
 $$;
 
 
 --
--- Name: get_articles(bigint[]); Type: FUNCTION; Schema: article_api; Owner: -
+-- Name: get_article_history(bigint, integer, integer); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
-CREATE FUNCTION article_api.get_articles(VARIADIC article_ids bigint[]) RETURNS SETOF article_api.article
+CREATE FUNCTION article_api.get_article_history(user_account_id bigint, page_number integer, page_size integer) RETURNS SETOF article_api.article_page_result
     LANGUAGE sql STABLE
     AS $$
+	WITH history_article AS (
+		SELECT
+			greatest(article.date_created, article.last_modified, star.date_starred) AS history_date,
+			coalesce(article.article_id, star.article_id) AS article_id
+		FROM
+			(
+				SELECT
+					date_created,
+					last_modified,
+					article_id
+				FROM article_api.user_article_pages
+				WHERE user_account_id = get_article_history.user_account_id
+			) AS article
+			FULL JOIN (
+				SELECT
+					date_starred,
+					article_id
+				FROM star
+				WHERE user_account_id = get_article_history.user_account_id
+			) AS star ON star.article_id = article.article_id
+	)
 	SELECT
-		article.id,
-		article.title,
-		article.slug,
-		source.name AS source,
-		article.date_published,
-		article.section,
-		article.description,
-		article.aotd_timestamp,
-		article_pages.urls[1] AS url,
-		coalesce(article_authors.names, '{}') AS authors,
-		coalesce(article_tags.names, '{}') AS tags,
-		article_pages.word_count,
-		coalesce(article_comment_count.count, 0) AS comment_count,
-		coalesce(article_read_count.count, 0) AS read_count,
-	   average_article_rating.score AS average_rating_score
-	FROM
-		article
-		JOIN article_api.article_pages ON (
-			article_pages.article_id = article.id AND
-			article_pages.article_id = ANY (article_ids)
-		)
-		JOIN source ON source.id = article.source_id
-		LEFT JOIN article_api.article_authors ON (
-			article_authors.article_id = article.id AND
-			article_authors.article_id = ANY (article_ids)
-		)
-		LEFT JOIN article_api.article_tags ON (
-			article_tags.article_id = article.id AND
-			article_tags.article_id = ANY (article_ids)
-		)
-		LEFT JOIN article_api.article_comment_count ON (
-			article_comment_count.article_id = article.id AND
-			article_comment_count.article_id = ANY (article_ids)
-		)
-		LEFT JOIN article_api.article_read_count ON (
-			article_read_count.article_id = article.id AND
-			article_read_count.article_id = ANY (article_ids)
-		)
-		LEFT JOIN article_api.average_article_rating ON (
-			average_article_rating.article_id = article.id AND
-			average_article_rating.article_id = ANY (article_ids)
-		)
-	ORDER BY array_position(article_ids, article.id)
-$$;
-
-
---
--- Name: get_comment(bigint); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.get_comment(comment_id bigint) RETURNS SETOF article_api.user_comment
-    LANGUAGE sql
-    AS $$
-	SELECT * FROM article_api.user_comment WHERE id = comment_id;
-$$;
-
-
---
--- Name: get_page(bigint); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.get_page(page_id bigint) RETURNS SETOF core.page
-    LANGUAGE sql
-    AS $$
-	SELECT * FROM page WHERE id = page_id;
-$$;
-
-
---
--- Name: get_percent_complete(numeric, numeric); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.get_percent_complete(readable_word_count numeric, words_read numeric) RETURNS double precision
-    LANGUAGE sql IMMUTABLE
-    AS $$
-	SELECT greatest(
-	   least(
-	      (coalesce(words_read, 0)::double precision / coalesce(readable_word_count, 1)) * 100,
-	      100
-	   ),
-	   0
-	);
-$$;
-
-
---
--- Name: source_rule; Type: TABLE; Schema: core; Owner: -
---
-
-CREATE TABLE core.source_rule (
-    id bigint NOT NULL,
-    hostname character varying(256) NOT NULL,
-    path character varying(256) NOT NULL,
-    priority integer DEFAULT 0 NOT NULL,
-    action core.source_rule_action NOT NULL
-);
-
-
---
--- Name: get_source_rules(); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.get_source_rules() RETURNS SETOF core.source_rule
-    LANGUAGE sql
-    AS $$
-	SELECT * FROM source_rule;
-$$;
-
-
---
--- Name: get_user_aotd(bigint); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.get_user_aotd(user_account_id bigint) RETURNS SETOF article_api.user_article
-    LANGUAGE sql STABLE
-    AS $$
-	SELECT * FROM article_api.get_user_articles(
+		articles.*,
+		(SELECT count(*) FROM history_article) AS total_count
+	FROM article_api.get_articles(
 		user_account_id,
-		(
-			SELECT id
-			FROM article
-			ORDER BY aotd_timestamp DESC NULLS LAST
-			LIMIT 1
+		VARIADIC ARRAY(
+			SELECT article_id
+			FROM history_article
+			ORDER BY history_date DESC
+			OFFSET (page_number - 1) * page_size
+			LIMIT page_size
 		)
-	);
+	) AS articles;
 $$;
 
 
 --
--- Name: get_user_article(bigint, bigint); Type: FUNCTION; Schema: article_api; Owner: -
+-- Name: get_articles(bigint, bigint[]); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
-CREATE FUNCTION article_api.get_user_article(article_id bigint, user_account_id bigint) RETURNS SETOF article_api.user_article
-    LANGUAGE sql STABLE
-    AS $$
-	SELECT * FROM article_api.get_user_articles(
-		user_account_id,
-		article_id
-	);
-$$;
-
-
---
--- Name: get_user_articles(bigint, bigint[]); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.get_user_articles(user_account_id bigint, VARIADIC article_ids bigint[]) RETURNS SETOF article_api.user_article
+CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC article_ids bigint[]) RETURNS SETOF article_api.article
     LANGUAGE sql STABLE
     AS $$
 	SELECT
@@ -773,20 +616,139 @@ CREATE FUNCTION article_api.get_user_articles(user_account_id bigint, VARIADIC a
 			average_article_rating.article_id = ANY (article_ids)
 		)
 		LEFT JOIN article_api.user_article_pages ON (
-		   user_article_pages.user_account_id = get_user_articles.user_account_id AND
+		   user_article_pages.user_account_id = get_articles.user_account_id AND
 			user_article_pages.article_id = article.id AND
 			user_article_pages.article_id = ANY (article_ids)
 		)
 		LEFT JOIN star ON (
-			star.user_account_id = get_user_articles.user_account_id AND
+			star.user_account_id = get_articles.user_account_id AND
 			star.article_id = article.id
 		)
 		LEFT JOIN article_api.user_article_rating ON (
-			user_article_rating.user_account_id = get_user_articles.user_account_id AND
+			user_article_rating.user_account_id = get_articles.user_account_id AND
 			user_article_rating.article_id = article.id AND
 			user_article_rating.article_id = ANY (article_ids)
 		)
 	ORDER BY array_position(article_ids, article.id)
+$$;
+
+
+--
+-- Name: get_comment(bigint); Type: FUNCTION; Schema: article_api; Owner: -
+--
+
+CREATE FUNCTION article_api.get_comment(comment_id bigint) RETURNS SETOF article_api.user_comment
+    LANGUAGE sql
+    AS $$
+	SELECT * FROM article_api.user_comment WHERE id = comment_id;
+$$;
+
+
+--
+-- Name: get_community_reads(bigint, integer, integer, text); Type: FUNCTION; Schema: article_api; Owner: -
+--
+
+CREATE FUNCTION article_api.get_community_reads(user_account_id bigint, page_number integer, page_size integer, sort text) RETURNS SETOF article_api.article_page_result
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT
+		articles.*,
+		(SELECT count(*) FROM article_api.community_read) AS total_count
+	FROM article_api.get_articles(
+		user_account_id,
+		VARIADIC ARRAY(
+			SELECT id
+			FROM article_api.community_read
+			ORDER BY CASE sort
+				WHEN 'hot' THEN hot_score
+				WHEN 'top' THEN top_score
+			END DESC
+			OFFSET (page_number - 1) * page_size
+			LIMIT page_size
+		)
+	) AS articles;
+$$;
+
+
+--
+-- Name: get_page(bigint); Type: FUNCTION; Schema: article_api; Owner: -
+--
+
+CREATE FUNCTION article_api.get_page(page_id bigint) RETURNS SETOF core.page
+    LANGUAGE sql
+    AS $$
+	SELECT * FROM page WHERE id = page_id;
+$$;
+
+
+--
+-- Name: get_percent_complete(numeric, numeric); Type: FUNCTION; Schema: article_api; Owner: -
+--
+
+CREATE FUNCTION article_api.get_percent_complete(readable_word_count numeric, words_read numeric) RETURNS double precision
+    LANGUAGE sql IMMUTABLE
+    AS $$
+	SELECT greatest(
+	   least(
+	      (coalesce(words_read, 0)::double precision / coalesce(readable_word_count, 1)) * 100,
+	      100
+	   ),
+	   0
+	);
+$$;
+
+
+--
+-- Name: source_rule; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.source_rule (
+    id bigint NOT NULL,
+    hostname character varying(256) NOT NULL,
+    path character varying(256) NOT NULL,
+    priority integer DEFAULT 0 NOT NULL,
+    action core.source_rule_action NOT NULL
+);
+
+
+--
+-- Name: get_source_rules(); Type: FUNCTION; Schema: article_api; Owner: -
+--
+
+CREATE FUNCTION article_api.get_source_rules() RETURNS SETOF core.source_rule
+    LANGUAGE sql
+    AS $$
+	SELECT * FROM source_rule;
+$$;
+
+
+--
+-- Name: get_starred_articles(bigint, integer, integer); Type: FUNCTION; Schema: article_api; Owner: -
+--
+
+CREATE FUNCTION article_api.get_starred_articles(user_account_id bigint, page_number integer, page_size integer) RETURNS SETOF article_api.article_page_result
+    LANGUAGE sql STABLE
+    AS $$
+	WITH starred_article AS (
+		SELECT
+			article_id,
+			date_starred
+		FROM star
+		WHERE user_account_id = get_starred_articles.user_account_id
+	)
+	SELECT
+		articles.*,
+		(SELECT count(*) FROM starred_article) AS total_count
+	FROM article_api.get_articles(
+		user_account_id,
+		VARIADIC ARRAY(
+			SELECT article_id
+			FROM starred_article
+			ORDER BY date_starred DESC
+			OFFSET (page_number - 1) * page_size
+			LIMIT page_size
+		)
+	) AS articles;
 $$;
 
 
@@ -818,31 +780,6 @@ $$;
 
 
 --
--- Name: list_community_reads(integer, integer, text); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.list_community_reads(page_number integer, page_size integer, sort text) RETURNS SETOF article_api.article_page_result
-    LANGUAGE sql STABLE
-    AS $$
-	SELECT
-		articles.*,
-		(SELECT count(*) FROM article_api.community_read) AS total_count
-	FROM article_api.get_articles(
-		VARIADIC ARRAY(
-			SELECT id
-			FROM article_api.community_read
-			ORDER BY CASE sort
-				WHEN 'hot' THEN hot_score
-			    WHEN 'top' THEN top_score
-			END DESC
-			OFFSET (page_number - 1) * page_size
-			LIMIT page_size
-		)
-	) AS articles;
-$$;
-
-
---
 -- Name: list_replies(bigint, integer, integer); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
@@ -868,106 +805,6 @@ CREATE FUNCTION article_api.list_replies(user_account_id bigint, page_number int
 	ORDER BY reply.date_created DESC
 	OFFSET (page_number - 1) * page_size
 	LIMIT page_size;
-$$;
-
-
---
--- Name: list_starred_articles(bigint, integer, integer); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.list_starred_articles(user_account_id bigint, page_number integer, page_size integer) RETURNS SETOF article_api.user_article_page_result
-    LANGUAGE sql STABLE
-    AS $$
-	WITH starred_article AS (
-		SELECT
-			article_id,
-			date_starred
-		FROM star
-		WHERE user_account_id = list_starred_articles.user_account_id
-	)
-	SELECT
-		articles.*,
-		(SELECT count(*) FROM starred_article) AS total_count
-	FROM article_api.get_user_articles(
-		user_account_id,
-		VARIADIC ARRAY(
-			SELECT article_id
-			FROM starred_article
-			ORDER BY date_starred DESC
-			OFFSET (page_number - 1) * page_size
-			LIMIT page_size
-		)
-	) AS articles;
-$$;
-
-
---
--- Name: list_user_article_history(bigint, integer, integer); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.list_user_article_history(user_account_id bigint, page_number integer, page_size integer) RETURNS SETOF article_api.user_article_page_result
-    LANGUAGE sql STABLE
-    AS $$
-	WITH history_article AS (
-		SELECT
-			greatest(article.date_created, article.last_modified, star.date_starred) AS history_date,
-			coalesce(article.article_id, star.article_id) AS article_id
-		FROM
-			(
-				SELECT
-					date_created,
-					last_modified,
-					article_id
-				FROM article_api.user_article_pages
-				WHERE user_account_id = list_user_article_history.user_account_id
-			) AS article
-			FULL JOIN (
-				SELECT
-					date_starred,
-					article_id
-				FROM star
-				WHERE user_account_id = list_user_article_history.user_account_id
-			) AS star ON star.article_id = article.article_id
-	)
-	SELECT
-		articles.*,
-		(SELECT count(*) FROM history_article) AS total_count
-	FROM article_api.get_user_articles(
-		user_account_id,
-		VARIADIC ARRAY(
-			SELECT article_id
-			FROM history_article
-			ORDER BY history_date DESC
-			OFFSET (page_number - 1) * page_size
-			LIMIT page_size
-		)
-	) AS articles;
-$$;
-
-
---
--- Name: list_user_community_reads(bigint, integer, integer, text); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.list_user_community_reads(user_account_id bigint, page_number integer, page_size integer, sort text) RETURNS SETOF article_api.user_article_page_result
-    LANGUAGE sql STABLE
-    AS $$
-	SELECT
-		articles.*,
-		(SELECT count(*) FROM article_api.community_read) AS total_count
-	FROM article_api.get_user_articles(
-		user_account_id,
-		VARIADIC ARRAY(
-			SELECT id
-			FROM article_api.community_read
-			ORDER BY CASE sort
-				WHEN 'hot' THEN hot_score
-			    WHEN 'top' THEN top_score
-			END DESC
-			OFFSET (page_number - 1) * page_size
-			LIMIT page_size
-		)
-	) AS articles;
 $$;
 
 

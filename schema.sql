@@ -387,34 +387,6 @@ $$;
 
 
 --
--- Name: create_email_share(timestamp without time zone, bigint, bigint, text, text[], bigint[], boolean[]); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.create_email_share(date_sent timestamp without time zone, article_id bigint, user_account_id bigint, message text, recipient_addresses text[], recipient_ids bigint[], recipient_results boolean[]) RETURNS bigint
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-	email_share_id bigint;
-BEGIN
-	INSERT INTO email_share (date_sent, article_id, user_account_id, message)
-		VALUES (date_sent, article_id, user_account_id, message)
-		RETURNING id INTO email_share_id;
-	FOR i IN 1..coalesce(array_length(recipient_addresses, 1), 0) LOOP
-		INSERT INTO email_share_recipient
-				(email_share_id, email_address, user_account_id, is_successful)
-			VALUES (
-				email_share_id,
-				recipient_addresses[i],
-				nullif(recipient_ids[i], 0),
-				recipient_results[i]
-			);
-	END LOOP;
-	RETURN email_share_id;
-END;
-$$;
-
-
---
 -- Name: page; Type: TABLE; Schema: core; Owner: -
 --
 
@@ -503,25 +475,6 @@ CREATE FUNCTION article_api.create_user_page(page_id bigint, user_account_id big
 	   create_user_page.readable_word_count
 	)
 	RETURNING *;
-$$;
-
-
---
--- Name: delete_user_article(bigint, bigint); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.delete_user_article(article_id bigint, user_account_id bigint) RETURNS void
-    LANGUAGE sql
-    AS $$
-	DELETE FROM user_page
-	WHERE (
-		page_id IN (
-			SELECT id
-			FROM page
-			WHERE page.article_id = delete_user_article.article_id
-		) AND
-		user_page.user_account_id = delete_user_article.user_account_id
-	);
 $$;
 
 

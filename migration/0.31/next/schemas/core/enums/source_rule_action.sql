@@ -1,1 +1,0 @@
-CREATE TYPE source_rule_action AS ENUM ('default', 'read', 'ignore');

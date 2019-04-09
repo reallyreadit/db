@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
--- Dumped from database version 9.6.8
+-- Dumped from database version 9.6.11
 -- Dumped by pg_dump version 11.2
 
 SET statement_timeout = 0;
@@ -27,6 +27,13 @@ CREATE SCHEMA article_api;
 --
 
 CREATE SCHEMA bulk_mailing_api;
+
+
+--
+-- Name: community_reads; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA community_reads;
 
 
 --
@@ -258,7 +265,10 @@ CREATE TABLE core.article (
     description text,
     aotd_timestamp timestamp without time zone,
     hot_score integer DEFAULT 0 NOT NULL,
-    top_score integer DEFAULT 0 NOT NULL
+    top_score integer DEFAULT 0 NOT NULL,
+    comment_count integer DEFAULT 0 NOT NULL,
+    read_count integer DEFAULT 0 NOT NULL,
+    average_rating_score numeric
 );
 
 
@@ -329,12 +339,23 @@ CREATE FUNCTION article_api.create_comment(text text, article_id bigint, parent_
     LANGUAGE plpgsql
     AS $$
 DECLARE
-  comment_id bigint;
+	comment_id bigint;
 BEGIN
+	-- insert the new comment, saving the id
 	INSERT INTO comment
-        (text, article_id, parent_comment_id, user_account_id) VALUES
-        (text, article_id, parent_comment_id, user_account_id) RETURNING id INTO comment_id;
-    RETURN QUERY SELECT * FROM article_api.user_comment WHERE id = comment_id;
+        (text, article_id, parent_comment_id, user_account_id)
+	VALUES
+    	(text, article_id, parent_comment_id, user_account_id)
+	RETURNING id INTO comment_id;
+	-- update the cached article comment count
+	UPDATE article
+	SET comment_count = comment_count + 1
+	WHERE id = article_id;
+	-- return the user_comment
+	RETURN QUERY
+	SELECT *
+	FROM article_api.user_comment
+	WHERE id = comment_id;
 END;
 $$;
 
@@ -473,26 +494,6 @@ $$;
 
 
 --
--- Name: get_aotd(bigint); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.get_aotd(user_account_id bigint) RETURNS SETOF article_api.article
-    LANGUAGE sql STABLE
-    AS $$
-	SELECT *
-	FROM article_api.get_articles(
-		user_account_id,
-		(
-			SELECT id
-			FROM article
-			ORDER BY aotd_timestamp DESC NULLS LAST
-			LIMIT 1
-		)
-	);
-$$;
-
-
---
 -- Name: get_article(bigint, bigint); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
@@ -571,8 +572,8 @@ CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC articl
 		coalesce(article_authors.names, '{}') AS authors,
 		coalesce(article_tags.names, '{}') AS tags,
 		article_pages.word_count,
-		coalesce(article_comment_count.count, 0) AS comment_count,
-		coalesce(article_read_count.count, 0) AS read_count,
+		article.comment_count::bigint,
+		article.read_count::bigint,
 		user_article_pages.date_created,
 		coalesce(
 		   article_api.get_percent_complete(
@@ -586,8 +587,8 @@ CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC articl
 		   FALSE
 		) AS is_read,
 		star.date_starred,
-	   average_article_rating.score AS average_rating_score,
-	   user_article_rating.score AS rating_score
+		article.average_rating_score,
+		user_article_rating.score AS rating_score
 	FROM
 		article
 		JOIN article_api.article_pages ON (
@@ -603,20 +604,8 @@ CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC articl
 			article_tags.article_id = article.id AND
 			article_tags.article_id = ANY (article_ids)
 		)
-		LEFT JOIN article_api.article_comment_count ON (
-			article_comment_count.article_id = article.id AND
-			article_comment_count.article_id = ANY (article_ids)
-		)
-		LEFT JOIN article_api.article_read_count ON (
-			article_read_count.article_id = article.id AND
-			article_read_count.article_id = ANY (article_ids)
-		)
-		LEFT JOIN article_api.average_article_rating ON (
-			average_article_rating.article_id = article.id AND
-			average_article_rating.article_id = ANY (article_ids)
-		)
 		LEFT JOIN article_api.user_article_pages ON (
-		   user_article_pages.user_account_id = get_articles.user_account_id AND
+			user_article_pages.user_account_id = get_articles.user_account_id AND
 			user_article_pages.article_id = article.id AND
 			user_article_pages.article_id = ANY (article_ids)
 		)
@@ -641,32 +630,6 @@ CREATE FUNCTION article_api.get_comment(comment_id bigint) RETURNS SETOF article
     LANGUAGE sql
     AS $$
 	SELECT * FROM article_api.user_comment WHERE id = comment_id;
-$$;
-
-
---
--- Name: get_community_reads(bigint, integer, integer, text); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.get_community_reads(user_account_id bigint, page_number integer, page_size integer, sort text) RETURNS SETOF article_api.article_page_result
-    LANGUAGE sql STABLE
-    AS $$
-	SELECT
-		articles.*,
-		(SELECT count(*) FROM article_api.community_read) AS total_count
-	FROM article_api.get_articles(
-		user_account_id,
-		VARIADIC ARRAY(
-			SELECT id
-			FROM article_api.community_read
-			ORDER BY CASE sort
-				WHEN 'hot' THEN hot_score
-				WHEN 'top' THEN top_score
-			END DESC
-			OFFSET (page_number - 1) * page_size
-			LIMIT page_size
-		)
-	) AS articles;
 $$;
 
 
@@ -825,12 +788,31 @@ CREATE TABLE core.rating (
 -- Name: rate_article(bigint, bigint, core.rating_score); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
-CREATE FUNCTION article_api.rate_article(article_id bigint, user_account_id bigint, score core.rating_score) RETURNS SETOF core.rating
-    LANGUAGE sql STRICT
+CREATE FUNCTION article_api.rate_article(article_id bigint, user_account_id bigint, score core.rating_score) RETURNS core.rating
+    LANGUAGE plpgsql STRICT
     AS $$
-	INSERT INTO rating (score, article_id, user_account_id)
-	VALUES (score, article_id, user_account_id)
-	RETURNING *;
+<<locals>>
+DECLARE
+   current_rating rating;
+BEGIN
+	-- insert the new rating
+	INSERT INTO rating
+		(score, article_id, user_account_id)
+	VALUES
+		(score, article_id, user_account_id)
+	RETURNING *
+	INTO locals.current_rating;
+	-- update the cached article average rating score
+	UPDATE article
+	SET average_rating_score = (
+	   	SELECT avg(user_article_rating.score)
+	   	FROM article_api.user_article_rating
+	   	WHERE user_article_rating.article_id = rate_article.article_id
+	)
+	WHERE id = rate_article.article_id;
+	-- return
+	RETURN locals.current_rating;
+END;
 $$;
 
 
@@ -852,36 +834,87 @@ $$;
 CREATE FUNCTION article_api.score_articles() RETURNS void
     LANGUAGE sql
     AS $$
+	WITH score AS (
+		SELECT
+			article.id AS article_id,
+			(
+				(
+				    coalesce(comments.score, 0) +
+					(coalesce(reads.score, 0) * greatest(1, (article_pages.word_count::double precision / 184) / 5))::int
+				) * (coalesce(article.average_rating_score, 5) / 5)
+			) AS hot,
+			(
+				(
+					coalesce(comments.count, 0) +
+					(coalesce(reads.count, 0) * greatest(1, (article_pages.word_count::double precision / 184) / 5))::int
+				) * (coalesce(article.average_rating_score, 5) / 5)
+			) AS top
+		FROM
+			(
+			    SELECT DISTINCT article_id AS id
+				FROM comment
+				WHERE date_created > utc_now() - '1 month'::interval
+				UNION
+				SELECT DISTINCT page.article_id AS id
+				FROM
+					page
+					JOIN user_page ON user_page.page_id = page.id
+				WHERE user_page.date_completed > utc_now() - '1 month'::interval
+			) AS scorable_article
+			JOIN article ON article.id = scorable_article.id
+			JOIN article_api.article_pages ON article_pages.article_id = article.id
+			LEFT JOIN (
+				SELECT
+					count(*) AS count,
+					sum(
+						CASE
+							WHEN age < '36 hours' THEN 200
+							WHEN age < '72 hours' THEN 150
+							WHEN age < '1 week' THEN 100
+							WHEN age < '2 weeks' THEN 50
+							WHEN age < '1 month' THEN 5
+							ELSE 1
+						END
+					) AS score,
+					article_id
+				FROM (
+					SELECT
+						article_id,
+						utc_now() - date_created AS age
+					FROM comment
+				) AS comment
+				GROUP BY article_id
+			) AS comments ON comments.article_id = article.id
+			LEFT JOIN (
+				SELECT
+					count(*) AS count,
+					sum(
+						CASE
+							WHEN age < '36 hours' THEN 175
+							WHEN age < '72 hours' THEN 125
+							WHEN age < '1 week' THEN 75
+							WHEN age < '2 weeks' THEN 25
+							WHEN age < '1 month' THEN 5
+							ELSE 1
+						END
+					) AS score,
+					article_id
+				FROM (
+					SELECT
+						article_id,
+						utc_now() - date_completed AS age
+					FROM article_api.user_article_pages
+					WHERE date_completed IS NOT NULL
+				) AS read
+				GROUP BY article_id
+			) AS reads ON reads.article_id = article.id
+	)
 	UPDATE article
 	SET
-	    hot_score = coalesce(article_score.hot_score, 0),
-	    top_score = coalesce(article_score.top_score, 0)
-	FROM article_api.article_score
-	WHERE article_score.article_id = article.id;
-$$;
-
-
---
--- Name: set_aotd(); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.set_aotd() RETURNS void
-    LANGUAGE sql
-    AS $$
-	UPDATE article
-	SET aotd_timestamp = utc_now()
-	WHERE id = (
-		SELECT id
-		FROM
-			article
-			JOIN article_api.article_pages ON article_pages.article_id = article.id
-		WHERE
-			aotd_timestamp IS NULL AND
-			word_count >= (184 * 5) AND
-			hot_score > 0
-		ORDER BY hot_score DESC
-		LIMIT 1
-	);
+		hot_score = score.hot,
+		top_score = score.top
+	FROM score
+	WHERE score.article_id = article.id;
 $$;
 
 
@@ -933,50 +966,65 @@ $$;
 --
 
 CREATE FUNCTION article_api.update_read_progress(user_page_id bigint, read_state integer[]) RETURNS core.user_page
-    LANGUAGE plpgsql
+    LANGUAGE plpgsql STRICT
     AS $$
 <<locals>>
 DECLARE
-	words_read CONSTANT int NOT NULL := (SELECT sum(n) FROM unnest(read_state) AS n WHERE n > 0);
-	page_id bigint;
-	is_complete boolean;
-	updated_user_page user_page;
+   -- calculate the words read from the read state
+	words_read CONSTANT int NOT NULL := (
+		SELECT sum(n)
+		FROM unnest(read_state) AS n
+		WHERE n > 0
+	);
+    -- local user_page
+	current_user_page user_page;
 BEGIN
-	-- get the page_id and cache the completion state before updating the progress
-	SELECT
-		user_page.page_id,
-		user_page.date_completed IS NOT NULL
-	INTO
-		locals.page_id,
-		locals.is_complete
+    -- read and lock the existing user_page
+    SELECT *
+    INTO locals.current_user_page
 	FROM user_page
-	WHERE user_page.id = update_read_progress.user_page_id;
-	-- update the progress
-	UPDATE user_page
-	SET
-		read_state = update_read_progress.read_state,
-		words_read = locals.words_read,
-		last_modified = utc_now()
 	WHERE user_page.id = update_read_progress.user_page_id
-	RETURNING * INTO locals.updated_user_page;
-	-- check if this update completed the page
-	IF
-		NOT is_complete AND
-		(
-		   SELECT article_api.get_percent_complete(
-		      locals.updated_user_page.readable_word_count,
-		      locals.words_read
-		   ) >= 90
-		)
+	FOR UPDATE;
+	-- only update if more words have been read
+	IF words_read > locals.current_user_page.words_read
 	THEN
-		-- set date_completed
+		-- update the progress
 		UPDATE user_page
-		SET date_completed = user_page.last_modified
+		SET
+			read_state = update_read_progress.read_state,
+			words_read = locals.words_read,
+			last_modified = utc_now()
 		WHERE user_page.id = update_read_progress.user_page_id
-		RETURNING * INTO locals.updated_user_page;
+		RETURNING *
+		INTO locals.current_user_page;
+		-- check if this update completed the page
+		IF
+			locals.current_user_page.date_completed IS NULL AND
+			(
+				SELECT article_api.get_percent_complete(
+					locals.current_user_page.readable_word_count,
+					locals.words_read
+				) >= 90
+			)
+		THEN
+			-- set date_completed
+			UPDATE user_page
+			SET date_completed = user_page.last_modified
+			WHERE user_page.id = update_read_progress.user_page_id
+			RETURNING *
+			INTO locals.current_user_page;
+			-- update the cached article read count
+			UPDATE article
+			SET read_count = read_count + 1
+			WHERE id = (
+					SELECT article_id
+					FROM page
+					WHERE id = locals.current_user_page.page_id
+				);
+		END IF;
 	END IF;
 	-- return
-	RETURN locals.updated_user_page;
+	RETURN locals.current_user_page;
 END;
 $$;
 
@@ -1147,6 +1195,257 @@ CREATE FUNCTION bulk_mailing_api.list_confirmation_reminder_recipients() RETURNS
 		JOIN user_account_api.user_account ON user_account.id = recipient.user_account_id
 	WHERE
 		bulk_mailing.list = 'ConfirmationReminder';
+$$;
+
+
+--
+-- Name: get_aotd(bigint); Type: FUNCTION; Schema: community_reads; Owner: -
+--
+
+CREATE FUNCTION community_reads.get_aotd(user_account_id bigint) RETURNS SETOF article_api.article
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT *
+	FROM article_api.get_articles(
+		user_account_id,
+		(
+			SELECT id
+			FROM article
+			ORDER BY aotd_timestamp DESC NULLS LAST
+			LIMIT 1
+		)
+	);
+$$;
+
+
+--
+-- Name: get_highest_rated(bigint, integer, integer, timestamp without time zone); Type: FUNCTION; Schema: community_reads; Owner: -
+--
+
+CREATE FUNCTION community_reads.get_highest_rated(user_account_id bigint, page_number integer, page_size integer, since_date timestamp without time zone) RETURNS SETOF article_api.article_page_result
+    LANGUAGE sql STABLE
+    AS $$
+    WITH highest_rated AS (
+		SELECT
+			article.id,
+			avg(user_article_rating.score) AS average_rating_score
+		FROM
+			article
+			JOIN article_api.user_article_rating ON user_article_rating.article_id = article.id
+		WHERE
+			since_date IS NOT NULL AND
+			user_article_rating.timestamp >= since_date
+		GROUP BY
+			article.id
+		UNION ALL
+		SELECT
+			id,
+			average_rating_score
+		FROM article
+		WHERE
+			since_date IS NULL AND
+			average_rating_score IS NOT NULL
+	)
+    SELECT
+    	articles.*,
+		(
+		    SELECT count(*)
+		    FROM highest_rated
+		) AS total_count
+    FROM article_api.get_articles(
+        user_account_id,
+		VARIADIC ARRAY(
+			SELECT id
+			FROM highest_rated
+			ORDER BY average_rating_score DESC
+			OFFSET (page_number - 1) * page_size
+			LIMIT page_size
+		)
+	) AS articles;
+$$;
+
+
+--
+-- Name: get_hot(bigint, integer, integer); Type: FUNCTION; Schema: community_reads; Owner: -
+--
+
+CREATE FUNCTION community_reads.get_hot(user_account_id bigint, page_number integer, page_size integer) RETURNS SETOF article_api.article_page_result
+    LANGUAGE sql STABLE
+    AS $$
+    WITH hot_read AS (
+        SELECT
+            id,
+            hot_score
+        FROM community_reads.listed_community_read
+        WHERE hot_score > 0
+	)
+    SELECT
+    	articles.*,
+		(
+		    SELECT count(*)
+		    FROM hot_read
+		) AS total_count
+    FROM article_api.get_articles(
+        user_account_id,
+		VARIADIC ARRAY(
+			SELECT id
+			FROM hot_read
+			ORDER BY hot_score DESC
+			OFFSET (page_number - 1) * page_size
+			LIMIT page_size
+		)
+	) AS articles;
+$$;
+
+
+--
+-- Name: get_most_commented(bigint, integer, integer, timestamp without time zone); Type: FUNCTION; Schema: community_reads; Owner: -
+--
+
+CREATE FUNCTION community_reads.get_most_commented(user_account_id bigint, page_number integer, page_size integer, since_date timestamp without time zone) RETURNS SETOF article_api.article_page_result
+    LANGUAGE sql STABLE
+    AS $$
+    WITH most_commented AS (
+		SELECT
+			article.id,
+			count(*) AS comment_count
+		FROM
+			article
+			JOIN comment ON comment.article_id = article.id
+		WHERE
+			since_date IS NOT NULL AND
+			comment.date_created>= since_date
+		GROUP BY
+			article.id
+		UNION ALL
+		SELECT
+			id,
+			comment_count
+		FROM article
+		WHERE
+			since_date IS NULL AND
+			comment_count > 0
+	)
+    SELECT
+    	articles.*,
+		(
+		    SELECT count(*)
+		    FROM most_commented
+		) AS total_count
+    FROM article_api.get_articles(
+        user_account_id,
+		VARIADIC ARRAY(
+			SELECT id
+			FROM most_commented
+			ORDER BY comment_count DESC
+			OFFSET (page_number - 1) * page_size
+			LIMIT page_size
+		)
+	) AS articles;
+$$;
+
+
+--
+-- Name: get_most_read(bigint, integer, integer, timestamp without time zone); Type: FUNCTION; Schema: community_reads; Owner: -
+--
+
+CREATE FUNCTION community_reads.get_most_read(user_account_id bigint, page_number integer, page_size integer, since_date timestamp without time zone) RETURNS SETOF article_api.article_page_result
+    LANGUAGE sql STABLE
+    AS $$
+    WITH most_read AS (
+		SELECT
+			article.id,
+			count(*) AS read_count
+		FROM
+			article
+			JOIN page ON page.article_id = article.id
+			JOIN user_page ON user_page.page_id = page.id
+		WHERE
+			since_date IS NOT NULL AND
+			user_page.date_completed >= since_date
+		GROUP BY
+			article.id
+		UNION ALL
+		SELECT
+			id,
+			read_count
+		FROM article
+		WHERE
+			since_date IS NULL AND
+			read_count > 0
+	)
+    SELECT
+    	articles.*,
+		(
+		    SELECT count(*)
+		    FROM most_read
+		) AS total_count
+    FROM article_api.get_articles(
+        user_account_id,
+		VARIADIC ARRAY(
+			SELECT id
+			FROM most_read
+			ORDER BY read_count DESC
+			OFFSET (page_number - 1) * page_size
+			LIMIT page_size
+		)
+	) AS articles;
+$$;
+
+
+--
+-- Name: get_top(bigint, integer, integer); Type: FUNCTION; Schema: community_reads; Owner: -
+--
+
+CREATE FUNCTION community_reads.get_top(user_account_id bigint, page_number integer, page_size integer) RETURNS SETOF article_api.article_page_result
+    LANGUAGE sql STABLE
+    AS $$
+    WITH top_read AS (
+        SELECT
+            id,
+            top_score
+        FROM community_reads.listed_community_read
+        WHERE top_score > 0
+	)
+    SELECT
+    	articles.*,
+		(
+		    SELECT count(*)
+		    FROM top_read
+		) AS total_count
+    FROM article_api.get_articles(
+        user_account_id,
+		VARIADIC ARRAY(
+			SELECT id
+			FROM top_read
+			ORDER BY top_score DESC
+			OFFSET (page_number - 1) * page_size
+			LIMIT page_size
+		)
+	) AS articles;
+$$;
+
+
+--
+-- Name: set_aotd(); Type: FUNCTION; Schema: community_reads; Owner: -
+--
+
+CREATE FUNCTION community_reads.set_aotd() RETURNS void
+    LANGUAGE sql
+    AS $$
+	UPDATE article
+	SET aotd_timestamp = utc_now()
+	WHERE id = (
+		SELECT id
+		FROM
+			community_reads.community_read
+			JOIN article_api.article_pages ON article_pages.article_id = community_read.id
+		WHERE
+			aotd_timestamp IS NULL AND
+			word_count >= (184 * 5)
+		ORDER BY hot_score DESC
+		LIMIT 1
+	);
 $$;
 
 
@@ -1836,17 +2135,6 @@ CREATE VIEW article_api.article_authors AS
 
 
 --
--- Name: article_comment_count; Type: VIEW; Schema: article_api; Owner: -
---
-
-CREATE VIEW article_api.article_comment_count AS
- SELECT count(*) AS count,
-    comment.article_id
-   FROM core.comment
-  GROUP BY comment.article_id;
-
-
---
 -- Name: article_pages; Type: VIEW; Schema: article_api; Owner: -
 --
 
@@ -1858,83 +2146,6 @@ CREATE VIEW article_api.article_pages AS
     page.article_id
    FROM core.page
   GROUP BY page.article_id;
-
-
---
--- Name: user_article_pages; Type: VIEW; Schema: article_api; Owner: -
---
-
-CREATE VIEW article_api.user_article_pages AS
- SELECT sum(user_page.readable_word_count) AS readable_word_count,
-    sum(user_page.words_read) AS words_read,
-    min(user_page.date_created) AS date_created,
-    max(user_page.last_modified) AS last_modified,
-    max(user_page.date_completed) AS date_completed,
-    user_page.user_account_id,
-    page.article_id
-   FROM (core.user_page
-     JOIN core.page ON ((page.id = user_page.page_id)))
-  GROUP BY user_page.user_account_id, page.article_id;
-
-
---
--- Name: article_read_count; Type: VIEW; Schema: article_api; Owner: -
---
-
-CREATE VIEW article_api.article_read_count AS
- SELECT count(*) AS count,
-    user_article_pages.article_id
-   FROM article_api.user_article_pages
-  WHERE (user_article_pages.date_completed IS NOT NULL)
-  GROUP BY user_article_pages.article_id;
-
-
---
--- Name: article_score; Type: VIEW; Schema: article_api; Owner: -
---
-
-CREATE VIEW article_api.article_score AS
- SELECT article_pages.article_id,
-        CASE
-            WHEN ((comments.count > 0) OR (reads.count > 1)) THEN (COALESCE(comments.score, (0)::bigint) + (((COALESCE(reads.score, (0)::bigint))::double precision * GREATEST((1)::double precision, (((article_pages.word_count)::double precision / (184)::double precision) / (5)::double precision))))::integer)
-            ELSE (0)::bigint
-        END AS hot_score,
-        CASE
-            WHEN ((comments.count > 0) OR (reads.count > 1)) THEN (COALESCE(comments.count, (0)::bigint) + (((COALESCE(reads.count, (0)::bigint))::double precision * GREATEST((1)::double precision, (((article_pages.word_count)::double precision / (184)::double precision) / (5)::double precision))))::integer)
-            ELSE (0)::bigint
-        END AS top_score
-   FROM ((article_api.article_pages
-     LEFT JOIN ( SELECT count(*) AS count,
-            sum(
-                CASE
-                    WHEN (comment.age < '36:00:00'::interval) THEN 200
-                    WHEN (comment.age < '72:00:00'::interval) THEN 150
-                    WHEN (comment.age < '7 days'::interval) THEN 100
-                    WHEN (comment.age < '14 days'::interval) THEN 50
-                    WHEN (comment.age < '1 mon'::interval) THEN 5
-                    ELSE 1
-                END) AS score,
-            comment.article_id
-           FROM ( SELECT comment_1.article_id,
-                    (core.utc_now() - comment_1.date_created) AS age
-                   FROM core.comment comment_1) comment
-          GROUP BY comment.article_id) comments ON ((comments.article_id = article_pages.article_id)))
-     LEFT JOIN ( SELECT count(*) AS count,
-            sum(
-                CASE
-                    WHEN (read.age < '36:00:00'::interval) THEN 175
-                    WHEN (read.age < '72:00:00'::interval) THEN 125
-                    WHEN (read.age < '7 days'::interval) THEN 75
-                    WHEN (read.age < '14 days'::interval) THEN 25
-                    WHEN (read.age < '1 mon'::interval) THEN 5
-                    ELSE 1
-                END) AS score,
-            read.article_id
-           FROM ( SELECT user_article_pages.article_id,
-                    (core.utc_now() - user_article_pages.last_modified) AS age
-                   FROM article_api.user_article_pages
-                  WHERE (user_article_pages.date_completed IS NOT NULL)) read
-          GROUP BY read.article_id) reads ON ((reads.article_id = article_pages.article_id)));
 
 
 --
@@ -1970,40 +2181,66 @@ CREATE VIEW article_api.article_tags AS
 
 
 --
+-- Name: user_article_pages; Type: VIEW; Schema: article_api; Owner: -
+--
+
+CREATE VIEW article_api.user_article_pages AS
+ SELECT sum(user_page.readable_word_count) AS readable_word_count,
+    sum(user_page.words_read) AS words_read,
+    min(user_page.date_created) AS date_created,
+    max(user_page.last_modified) AS last_modified,
+    max(user_page.date_completed) AS date_completed,
+    user_page.user_account_id,
+    page.article_id
+   FROM (core.user_page
+     JOIN core.page ON ((page.id = user_page.page_id)))
+  GROUP BY user_page.user_account_id, page.article_id;
+
+
+--
 -- Name: user_article_rating; Type: VIEW; Schema: article_api; Owner: -
 --
 
 CREATE VIEW article_api.user_article_rating AS
  SELECT rating.article_id,
     rating.user_account_id,
-    rating.score
+    rating.score,
+    rating."timestamp"
    FROM (core.rating
      LEFT JOIN core.rating more_recent_rating ON (((rating.article_id = more_recent_rating.article_id) AND (rating.user_account_id = more_recent_rating.user_account_id) AND (rating."timestamp" < more_recent_rating."timestamp"))))
   WHERE (more_recent_rating.id IS NULL);
 
 
 --
--- Name: average_article_rating; Type: VIEW; Schema: article_api; Owner: -
+-- Name: community_read; Type: VIEW; Schema: community_reads; Owner: -
 --
 
-CREATE VIEW article_api.average_article_rating AS
- SELECT user_article_rating.article_id,
-    avg((user_article_rating.score)::integer) AS score
-   FROM article_api.user_article_rating
-  GROUP BY user_article_rating.article_id;
-
-
---
--- Name: community_read; Type: VIEW; Schema: article_api; Owner: -
---
-
-CREATE VIEW article_api.community_read AS
+CREATE VIEW community_reads.community_read AS
  SELECT article.id,
+    article.aotd_timestamp,
     article.hot_score,
-    article.top_score
+    article.top_score,
+    article.comment_count,
+    article.read_count,
+    article.average_rating_score
    FROM core.article
-  WHERE (((article.hot_score > 0) OR (article.top_score > 0)) AND ((article.aotd_timestamp IS NULL) OR (article.aotd_timestamp <> ( SELECT max(article_1.aotd_timestamp) AS max
-           FROM core.article article_1))));
+  WHERE ((article.comment_count > 0) OR (article.read_count > 1) OR (article.average_rating_score IS NOT NULL));
+
+
+--
+-- Name: listed_community_read; Type: VIEW; Schema: community_reads; Owner: -
+--
+
+CREATE VIEW community_reads.listed_community_read AS
+ SELECT community_read.id,
+    community_read.hot_score,
+    community_read.top_score,
+    community_read.comment_count,
+    community_read.read_count,
+    community_read.average_rating_score
+   FROM community_reads.community_read
+  WHERE (community_read.aotd_timestamp <> ( SELECT max(article.aotd_timestamp) AS max
+           FROM core.article));
 
 
 --
@@ -2921,10 +3158,31 @@ CREATE INDEX article_aotd_timestamp_idx ON core.article USING btree (aotd_timest
 
 
 --
+-- Name: article_average_rating_score_idx; Type: INDEX; Schema: core; Owner: -
+--
+
+CREATE INDEX article_average_rating_score_idx ON core.article USING btree (average_rating_score DESC);
+
+
+--
+-- Name: article_comment_count_idx; Type: INDEX; Schema: core; Owner: -
+--
+
+CREATE INDEX article_comment_count_idx ON core.article USING btree (comment_count DESC);
+
+
+--
 -- Name: article_hot_score_idx; Type: INDEX; Schema: core; Owner: -
 --
 
 CREATE INDEX article_hot_score_idx ON core.article USING btree (hot_score DESC);
+
+
+--
+-- Name: article_read_count_idx; Type: INDEX; Schema: core; Owner: -
+--
+
+CREATE INDEX article_read_count_idx ON core.article USING btree (read_count DESC);
 
 
 --

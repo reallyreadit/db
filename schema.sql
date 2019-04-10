@@ -868,6 +868,7 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
 					count(*) AS count,
 					sum(
 						CASE
+						    WHEN age < '18 hours' THEN 400
 							WHEN age < '36 hours' THEN 200
 							WHEN age < '72 hours' THEN 150
 							WHEN age < '1 week' THEN 100
@@ -890,6 +891,7 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
 					count(*) AS count,
 					sum(
 						CASE
+						    WHEN age < '18 hours' THEN 350
 							WHEN age < '36 hours' THEN 175
 							WHEN age < '72 hours' THEN 125
 							WHEN age < '1 week' THEN 75

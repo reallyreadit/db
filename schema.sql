@@ -2241,7 +2241,7 @@ CREATE VIEW community_reads.listed_community_read AS
     community_read.read_count,
     community_read.average_rating_score
    FROM community_reads.community_read
-  WHERE (community_read.aotd_timestamp <> ( SELECT max(article.aotd_timestamp) AS max
+  WHERE (community_read.aotd_timestamp IS DISTINCT FROM ( SELECT max(article.aotd_timestamp) AS max
            FROM core.article));
 
 

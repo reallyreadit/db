@@ -839,19 +839,19 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
 			article.id AS article_id,
 			(
 				(
-				    coalesce(comments.score, 0) +
-					(coalesce(reads.score, 0) * greatest(1, (article_pages.word_count::double precision / 184) / 5))::int
+					coalesce(comments.score, 0) +
+					(coalesce(reads.score, 0) * greatest(1, (article_pages.word_count::double precision / 184) / 7))::int
 				) * (coalesce(article.average_rating_score, 5) / 5)
 			) AS hot,
 			(
 				(
 					coalesce(comments.count, 0) +
-					(coalesce(reads.count, 0) * greatest(1, (article_pages.word_count::double precision / 184) / 5))::int
+					(coalesce(reads.count, 0) * greatest(1, (article_pages.word_count::double precision / 184) / 7))::int
 				) * (coalesce(article.average_rating_score, 5) / 5)
 			) AS top
 		FROM
 			(
-			    SELECT DISTINCT article_id AS id
+			   SELECT DISTINCT article_id AS id
 				FROM comment
 				WHERE date_created > utc_now() - '1 month'::interval
 				UNION
@@ -868,7 +868,7 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
 					count(*) AS count,
 					sum(
 						CASE
-						    WHEN age < '18 hours' THEN 400
+						   WHEN age < '18 hours' THEN 400
 							WHEN age < '36 hours' THEN 200
 							WHEN age < '72 hours' THEN 150
 							WHEN age < '1 week' THEN 100
@@ -891,7 +891,7 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
 					count(*) AS count,
 					sum(
 						CASE
-						    WHEN age < '18 hours' THEN 350
+						   WHEN age < '18 hours' THEN 350
 							WHEN age < '36 hours' THEN 175
 							WHEN age < '72 hours' THEN 125
 							WHEN age < '1 week' THEN 75

@@ -3,7 +3,7 @@
 --
 
 -- Dumped from database version 9.6.11
--- Dumped by pg_dump version 11.2
+-- Dumped by pg_dump version 10.3
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -14,6 +14,13 @@ SELECT pg_catalog.set_config('search_path', '', false);
 SET check_function_bodies = false;
 SET client_min_messages = warning;
 SET row_security = off;
+
+--
+-- Name: analytics; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA analytics;
+
 
 --
 -- Name: article_api; Type: SCHEMA; Schema: -; Owner: -
@@ -55,6 +62,20 @@ CREATE SCHEMA stats_api;
 --
 
 CREATE SCHEMA user_account_api;
+
+
+--
+-- Name: plpgsql; Type: EXTENSION; Schema: -; Owner: -
+--
+
+CREATE EXTENSION IF NOT EXISTS plpgsql WITH SCHEMA pg_catalog;
+
+
+--
+-- Name: EXTENSION plpgsql; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON EXTENSION plpgsql IS 'PL/pgSQL procedural language';
 
 
 --
@@ -199,6 +220,76 @@ CREATE TYPE core.user_account_role AS ENUM (
 
 
 --
+-- Name: get_key_metrics(timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: analytics; Owner: -
+--
+
+CREATE FUNCTION analytics.get_key_metrics(start_date timestamp without time zone, end_date timestamp without time zone) RETURNS TABLE(day timestamp without time zone, user_accounts_app_count bigint, user_accounts_browser_count bigint, user_accounts_unknown_count bigint, reads_app_count bigint, reads_browser_count bigint, reads_unknown_count bigint, comments_app_count bigint, comments_browser_count bigint, comments_unknown_count bigint)
+    LANGUAGE sql
+    AS $$
+	WITH range AS (
+		SELECT
+			date AS day,
+			date + '1 day'::interval AS next_day
+		FROM generate_series(
+		    get_key_metrics.start_date,
+		    get_key_metrics.end_date,
+		    '1 day'::interval
+		) AS series (date)
+	)
+	SELECT
+		range.day,
+		coalesce(user_accounts.app_count, 0) AS user_accounts_app_count,
+		coalesce(user_accounts.browser_count, 0) AS user_accounts_browser_count,
+		coalesce(user_accounts.unknown_count, 0) AS user_accounts_unknown_count,
+		coalesce(reads.app_count, 0) AS reads_app_count,
+		coalesce(reads.browser_count, 0) AS reads_browser_count,
+		coalesce(reads.unknown_count, 0) AS reads_unknown_count,
+		coalesce(comments.app_count, 0) AS comments_app_count,
+		coalesce(comments.browser_count, 0) AS comments_browser_count,
+		coalesce(comments.unknown_count, 0) AS comments_unknown_count
+	FROM
+		range
+		LEFT JOIN (
+			SELECT
+				range.day,
+				count(*) FILTER (WHERE analytics->'client'->>'mode' = 'App') AS app_count,
+				count(*) FILTER (WHERE analytics->'client'->>'mode' = 'Browser') AS browser_count,
+				count(*) FILTER (WHERE analytics IS NULL) AS unknown_count
+			FROM
+				user_account
+				JOIN range ON user_account.date_created >= range.day AND user_account.date_created < range.next_day
+			GROUP BY range.day
+		) AS user_accounts ON user_accounts.day = range.day
+		LEFT JOIN (
+			SELECT
+				range.day,
+				count(*) FILTER (WHERE analytics->'client'->>'type' = 'ios/app') AS app_count,
+				count(*) FILTER (WHERE analytics->'client'->>'type' = 'web/extension') AS browser_count,
+				count(*) FILTER (WHERE analytics IS NULL) AS unknown_count
+			FROM
+				user_page
+				JOIN range ON user_page.date_completed >= range.day AND user_page.date_completed < range.next_day
+			GROUP BY range.day
+		) AS reads ON reads.day = range.day
+		LEFT JOIN (
+			SELECT
+				range.day,
+				count(*) FILTER (WHERE
+					analytics->'client'->>'mode' = 'App' OR
+					analytics->'client'->>'type' = 'ios/app'
+				) AS app_count,
+				count(*) FILTER (WHERE analytics->'client'->>'mode' = 'Browser') AS browser_count,
+				count(*) FILTER (WHERE analytics IS NULL) AS unknown_count
+			FROM
+				comment
+				JOIN range ON comment.date_created >= range.day AND comment.date_created < range.next_day
+			GROUP BY range.day
+		) AS comments ON comments.day = range.day
+	ORDER BY range.day DESC;
+$$;
+
+
+--
 -- Name: create_article(text, text, bigint, timestamp without time zone, timestamp without time zone, text, text, text[], text[], text[]); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
@@ -283,7 +374,8 @@ CREATE TABLE core.comment (
     article_id bigint NOT NULL,
     user_account_id bigint NOT NULL,
     parent_comment_id bigint,
-    date_read timestamp without time zone
+    date_read timestamp without time zone,
+    analytics jsonb
 );
 
 
@@ -306,6 +398,7 @@ CREATE TABLE core.user_account (
     receive_website_updates boolean DEFAULT true,
     receive_suggested_readings boolean DEFAULT true,
     time_zone_id bigint,
+    analytics jsonb,
     CONSTRAINT user_account_email_valid CHECK (((email)::text ~~ '%@%'::text)),
     CONSTRAINT user_account_name_valid CHECK (((name)::text ~ similar_escape('[A-Za-z0-9\-_]+'::text, NULL::text)))
 );
@@ -332,10 +425,10 @@ CREATE VIEW article_api.user_comment AS
 
 
 --
--- Name: create_comment(text, bigint, bigint, bigint); Type: FUNCTION; Schema: article_api; Owner: -
+-- Name: create_comment(text, bigint, bigint, bigint, text); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
-CREATE FUNCTION article_api.create_comment(text text, article_id bigint, parent_comment_id bigint, user_account_id bigint) RETURNS SETOF article_api.user_comment
+CREATE FUNCTION article_api.create_comment(text text, article_id bigint, parent_comment_id bigint, user_account_id bigint, analytics text) RETURNS SETOF article_api.user_comment
     LANGUAGE plpgsql
     AS $$
 DECLARE
@@ -343,9 +436,9 @@ DECLARE
 BEGIN
 	-- insert the new comment, saving the id
 	INSERT INTO comment
-        (text, article_id, parent_comment_id, user_account_id)
+        (text, article_id, parent_comment_id, user_account_id, analytics)
 	VALUES
-    	(text, article_id, parent_comment_id, user_account_id)
+    	(text, article_id, parent_comment_id, user_account_id, analytics::json)
 	RETURNING id INTO comment_id;
 	-- update the cached article comment count
 	UPDATE article
@@ -425,28 +518,31 @@ CREATE TABLE core.user_page (
     read_state integer[] NOT NULL,
     words_read integer DEFAULT 0 NOT NULL,
     date_completed timestamp without time zone,
-    readable_word_count integer NOT NULL
+    readable_word_count integer NOT NULL,
+    analytics jsonb
 );
 
 
 --
--- Name: create_user_page(bigint, bigint, integer); Type: FUNCTION; Schema: article_api; Owner: -
+-- Name: create_user_page(bigint, bigint, integer, text); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
-CREATE FUNCTION article_api.create_user_page(page_id bigint, user_account_id bigint, readable_word_count integer) RETURNS core.user_page
+CREATE FUNCTION article_api.create_user_page(page_id bigint, user_account_id bigint, readable_word_count integer, analytics text) RETURNS core.user_page
     LANGUAGE sql
     AS $$
 	INSERT INTO user_page (
-	   page_id,
-	   user_account_id,
-	   read_state,
-	   readable_word_count
+		page_id,
+		user_account_id,
+		read_state,
+		readable_word_count,
+		analytics
 	)
 	VALUES (
 		create_user_page.page_id,
 		create_user_page.user_account_id,
 		ARRAY[(SELECT -create_user_page.readable_word_count)],
-	   create_user_page.readable_word_count
+		create_user_page.readable_word_count,
+	    create_user_page.analytics::json
 	)
 	RETURNING *;
 $$;
@@ -964,11 +1060,11 @@ $$;
 
 
 --
--- Name: update_read_progress(bigint, integer[]); Type: FUNCTION; Schema: article_api; Owner: -
+-- Name: update_read_progress(bigint, integer[], text); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
-CREATE FUNCTION article_api.update_read_progress(user_page_id bigint, read_state integer[]) RETURNS core.user_page
-    LANGUAGE plpgsql STRICT
+CREATE FUNCTION article_api.update_read_progress(user_page_id bigint, read_state integer[], analytics text) RETURNS core.user_page
+    LANGUAGE plpgsql
     AS $$
 <<locals>>
 DECLARE
@@ -995,7 +1091,8 @@ BEGIN
 		SET
 			read_state = update_read_progress.read_state,
 			words_read = locals.words_read,
-			last_modified = utc_now()
+			last_modified = utc_now(),
+		    analytics = update_read_progress.analytics::json
 		WHERE user_page.id = update_read_progress.user_page_id
 		RETURNING *
 		INTO locals.current_user_page;
@@ -1868,18 +1965,20 @@ $$;
 
 
 --
--- Name: create_user_account(text, text, bytea, bytea, bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
+-- Name: create_user_account(text, text, bytea, bytea, bigint, text); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
-CREATE FUNCTION user_account_api.create_user_account(name text, email text, password_hash bytea, password_salt bytea, time_zone_id bigint) RETURNS SETOF user_account_api.user_account
+CREATE FUNCTION user_account_api.create_user_account(name text, email text, password_hash bytea, password_salt bytea, time_zone_id bigint, analytics text) RETURNS SETOF user_account_api.user_account
     LANGUAGE plpgsql
     AS $$
 DECLARE
 	user_account_id bigint;
 BEGIN
-	INSERT INTO user_account (name, email, password_hash, password_salt, time_zone_id)
-		VALUES (trim(name), trim(email), password_hash, password_salt, time_zone_id)
-		RETURNING id INTO user_account_id;
+	INSERT INTO
+	    user_account (name, email, password_hash, password_salt, time_zone_id, analytics)
+	VALUES
+		(trim(name), trim(email), password_hash, password_salt, time_zone_id, analytics::json)
+	RETURNING id INTO user_account_id;
 	RETURN QUERY
 	SELECT *
 	FROM user_account_api.user_account

@@ -2,8 +2,8 @@
 -- PostgreSQL database dump
 --
 
--- Dumped from database version 9.6.11
--- Dumped by pg_dump version 10.3
+-- Dumped from database version 9.6.9
+-- Dumped by pg_dump version 11.2
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -62,20 +62,6 @@ CREATE SCHEMA stats_api;
 --
 
 CREATE SCHEMA user_account_api;
-
-
---
--- Name: plpgsql; Type: EXTENSION; Schema: -; Owner: -
---
-
-CREATE EXTENSION IF NOT EXISTS plpgsql WITH SCHEMA pg_catalog;
-
-
---
--- Name: EXTENSION plpgsql; Type: COMMENT; Schema: -; Owner: -
---
-
-COMMENT ON EXTENSION plpgsql IS 'PL/pgSQL procedural language';
 
 
 --
@@ -359,7 +345,8 @@ CREATE TABLE core.article (
     top_score integer DEFAULT 0 NOT NULL,
     comment_count integer DEFAULT 0 NOT NULL,
     read_count integer DEFAULT 0 NOT NULL,
-    average_rating_score numeric
+    average_rating_score numeric,
+    word_count integer DEFAULT 0 NOT NULL
 );
 
 
@@ -472,11 +459,18 @@ CREATE TABLE core.page (
 --
 
 CREATE FUNCTION article_api.create_page(article_id bigint, number integer, word_count integer, readable_word_count integer, url text) RETURNS core.page
-    LANGUAGE sql
+    LANGUAGE plpgsql
     AS $$
+BEGIN
+    -- set the cached word_count on article
+    UPDATE article
+    SET word_count = create_page.word_count
+    WHERE id = create_page.article_id;
+    -- create the new page and return it
 	INSERT INTO page (article_id, number, word_count, readable_word_count, url)
-		VALUES (article_id, number, word_count, readable_word_count, url)
-		RETURNING *;
+	VALUES (article_id, number, word_count, readable_word_count, url)
+	RETURNING *;
+END;
 $$;
 
 
@@ -605,16 +599,16 @@ $$;
 
 
 --
--- Name: get_article_history(bigint, integer, integer); Type: FUNCTION; Schema: article_api; Owner: -
+-- Name: get_article_history(bigint, integer, integer, integer, integer); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
-CREATE FUNCTION article_api.get_article_history(user_account_id bigint, page_number integer, page_size integer) RETURNS SETOF article_api.article_page_result
+CREATE FUNCTION article_api.get_article_history(user_account_id bigint, page_number integer, page_size integer, min_length integer, max_length integer) RETURNS SETOF article_api.article_page_result
     LANGUAGE sql STABLE
     AS $$
 	WITH history_article AS (
 		SELECT
-			greatest(article.date_created, article.last_modified, star.date_starred) AS history_date,
-			coalesce(article.article_id, star.article_id) AS article_id
+			greatest(user_article.date_created, user_article.last_modified, star.date_starred) AS history_date,
+			coalesce(user_article.article_id, star.article_id) AS article_id
 		FROM
 			(
 				SELECT
@@ -623,14 +617,23 @@ CREATE FUNCTION article_api.get_article_history(user_account_id bigint, page_num
 					article_id
 				FROM article_api.user_article_pages
 				WHERE user_account_id = get_article_history.user_account_id
-			) AS article
+			) AS user_article
 			FULL JOIN (
 				SELECT
 					date_starred,
 					article_id
 				FROM star
 				WHERE user_account_id = get_article_history.user_account_id
-			) AS star ON star.article_id = article.article_id
+			) AS star ON star.article_id = user_article.article_id
+	    	JOIN article ON (
+				article.id = user_article.article_id OR
+				article.id = star.article_id
+			)
+	    WHERE core.matches_article_length(
+			article.word_count,
+			min_length,
+			max_length
+		)
 	)
 	SELECT
 		articles.*,
@@ -667,7 +670,7 @@ CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC articl
 		article_pages.urls[1] AS url,
 		coalesce(article_authors.names, '{}') AS authors,
 		coalesce(article_tags.names, '{}') AS tags,
-		article_pages.word_count,
+		article.word_count::bigint,
 		article.comment_count::bigint,
 		article.read_count::bigint,
 		user_article_pages.date_created,
@@ -782,18 +785,26 @@ $$;
 
 
 --
--- Name: get_starred_articles(bigint, integer, integer); Type: FUNCTION; Schema: article_api; Owner: -
+-- Name: get_starred_articles(bigint, integer, integer, integer, integer); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
-CREATE FUNCTION article_api.get_starred_articles(user_account_id bigint, page_number integer, page_size integer) RETURNS SETOF article_api.article_page_result
+CREATE FUNCTION article_api.get_starred_articles(user_account_id bigint, page_number integer, page_size integer, min_length integer, max_length integer) RETURNS SETOF article_api.article_page_result
     LANGUAGE sql STABLE
     AS $$
 	WITH starred_article AS (
 		SELECT
 			article_id,
 			date_starred
-		FROM star
-		WHERE user_account_id = get_starred_articles.user_account_id
+		FROM
+			star
+			JOIN article ON article.id = star.article_id
+		WHERE
+			star.user_account_id = get_starred_articles.user_account_id AND
+		    core.matches_article_length(
+				article.word_count,
+				min_length,
+				max_length
+			)
 	)
 	SELECT
 		articles.*,
@@ -936,13 +947,13 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
 			(
 				(
 					coalesce(comments.score, 0) +
-					(coalesce(reads.score, 0) * greatest(1, (article_pages.word_count::double precision / 184) / 7))::int
+					(coalesce(reads.score, 0) * greatest(1, core.estimate_article_length(article.word_count) / 7))::int
 				) * (coalesce(article.average_rating_score, 5) / 5)
 			) AS hot,
 			(
 				(
 					coalesce(comments.count, 0) +
-					(coalesce(reads.count, 0) * greatest(1, (article_pages.word_count::double precision / 184) / 7))::int
+					(coalesce(reads.count, 0) * greatest(1, core.estimate_article_length(article.word_count) / 7))::int
 				) * (coalesce(article.average_rating_score, 5) / 5)
 			) AS top
 		FROM
@@ -958,7 +969,6 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
 				WHERE user_page.date_completed > utc_now() - '1 month'::interval
 			) AS scorable_article
 			JOIN article ON article.id = scorable_article.id
-			JOIN article_api.article_pages ON article_pages.article_id = article.id
 			LEFT JOIN (
 				SELECT
 					count(*) AS count,
@@ -1048,14 +1058,25 @@ $$;
 --
 
 CREATE FUNCTION article_api.update_page(page_id bigint, word_count integer, readable_word_count integer) RETURNS core.page
-    LANGUAGE sql
+    LANGUAGE plpgsql
     AS $$
+DECLARE
+    updated_page page;
+BEGIN
+    -- update the page and store it in the local variable
 	UPDATE page
 	SET
 	    word_count = update_page.word_count,
 	    readable_word_count = update_page.readable_word_count
 	WHERE page.id = update_page.page_id
-	RETURNING *;
+	RETURNING * INTO updated_page;
+    -- update the cached word_count on article
+    UPDATE article
+    SET word_count = update_page.word_count
+    WHERE id = updated_page.article_id;
+    -- return the updated page
+    RETURN updated_page;
+END;
 $$;
 
 
@@ -1318,10 +1339,10 @@ $$;
 
 
 --
--- Name: get_highest_rated(bigint, integer, integer, timestamp without time zone); Type: FUNCTION; Schema: community_reads; Owner: -
+-- Name: get_highest_rated(bigint, integer, integer, timestamp without time zone, integer, integer); Type: FUNCTION; Schema: community_reads; Owner: -
 --
 
-CREATE FUNCTION community_reads.get_highest_rated(user_account_id bigint, page_number integer, page_size integer, since_date timestamp without time zone) RETURNS SETOF article_api.article_page_result
+CREATE FUNCTION community_reads.get_highest_rated(user_account_id bigint, page_number integer, page_size integer, since_date timestamp without time zone, min_length integer, max_length integer) RETURNS SETOF article_api.article_page_result
     LANGUAGE sql STABLE
     AS $$
     WITH highest_rated AS (
@@ -1333,7 +1354,12 @@ CREATE FUNCTION community_reads.get_highest_rated(user_account_id bigint, page_n
 			JOIN article_api.user_article_rating ON user_article_rating.article_id = listed_community_read.id
 		WHERE
 			since_date IS NOT NULL AND
-			user_article_rating.timestamp >= since_date
+			user_article_rating.timestamp >= since_date AND
+		    core.matches_article_length(
+				word_count,
+				min_length,
+				max_length
+			)
 		GROUP BY
 			listed_community_read.id
 		UNION ALL
@@ -1343,7 +1369,12 @@ CREATE FUNCTION community_reads.get_highest_rated(user_account_id bigint, page_n
 		FROM community_reads.listed_community_read
 		WHERE
 			since_date IS NULL AND
-			average_rating_score IS NOT NULL
+			average_rating_score IS NOT NULL AND
+		    core.matches_article_length(
+				word_count,
+				min_length,
+				max_length
+			)
 	)
     SELECT
     	articles.*,
@@ -1365,10 +1396,10 @@ $$;
 
 
 --
--- Name: get_hot(bigint, integer, integer); Type: FUNCTION; Schema: community_reads; Owner: -
+-- Name: get_hot(bigint, integer, integer, integer, integer); Type: FUNCTION; Schema: community_reads; Owner: -
 --
 
-CREATE FUNCTION community_reads.get_hot(user_account_id bigint, page_number integer, page_size integer) RETURNS SETOF article_api.article_page_result
+CREATE FUNCTION community_reads.get_hot(user_account_id bigint, page_number integer, page_size integer, min_length integer, max_length integer) RETURNS SETOF article_api.article_page_result
     LANGUAGE sql STABLE
     AS $$
     WITH hot_read AS (
@@ -1376,7 +1407,14 @@ CREATE FUNCTION community_reads.get_hot(user_account_id bigint, page_number inte
             id,
             hot_score
         FROM community_reads.listed_community_read
-        WHERE hot_score > 0
+        WHERE (
+			hot_score > 0 AND
+			core.matches_article_length(
+				word_count,
+			    min_length,
+			    max_length
+			)
+		)
 	)
     SELECT
     	articles.*,
@@ -1398,10 +1436,10 @@ $$;
 
 
 --
--- Name: get_most_commented(bigint, integer, integer, timestamp without time zone); Type: FUNCTION; Schema: community_reads; Owner: -
+-- Name: get_most_commented(bigint, integer, integer, timestamp without time zone, integer, integer); Type: FUNCTION; Schema: community_reads; Owner: -
 --
 
-CREATE FUNCTION community_reads.get_most_commented(user_account_id bigint, page_number integer, page_size integer, since_date timestamp without time zone) RETURNS SETOF article_api.article_page_result
+CREATE FUNCTION community_reads.get_most_commented(user_account_id bigint, page_number integer, page_size integer, since_date timestamp without time zone, min_length integer, max_length integer) RETURNS SETOF article_api.article_page_result
     LANGUAGE sql STABLE
     AS $$
     WITH most_commented AS (
@@ -1413,7 +1451,12 @@ CREATE FUNCTION community_reads.get_most_commented(user_account_id bigint, page_
 			JOIN comment ON comment.article_id = listed_community_read.id
 		WHERE
 			since_date IS NOT NULL AND
-			comment.date_created>= since_date
+			comment.date_created >= since_date AND
+		    core.matches_article_length(
+				word_count,
+				min_length,
+				max_length
+			)
 		GROUP BY
 			listed_community_read.id
 		UNION ALL
@@ -1423,7 +1466,12 @@ CREATE FUNCTION community_reads.get_most_commented(user_account_id bigint, page_
 		FROM community_reads.listed_community_read
 		WHERE
 			since_date IS NULL AND
-			comment_count > 0
+			comment_count > 0 AND
+		    core.matches_article_length(
+				word_count,
+				min_length,
+				max_length
+			)
 	)
     SELECT
     	articles.*,
@@ -1445,10 +1493,10 @@ $$;
 
 
 --
--- Name: get_most_read(bigint, integer, integer, timestamp without time zone); Type: FUNCTION; Schema: community_reads; Owner: -
+-- Name: get_most_read(bigint, integer, integer, timestamp without time zone, integer, integer); Type: FUNCTION; Schema: community_reads; Owner: -
 --
 
-CREATE FUNCTION community_reads.get_most_read(user_account_id bigint, page_number integer, page_size integer, since_date timestamp without time zone) RETURNS SETOF article_api.article_page_result
+CREATE FUNCTION community_reads.get_most_read(user_account_id bigint, page_number integer, page_size integer, since_date timestamp without time zone, min_length integer, max_length integer) RETURNS SETOF article_api.article_page_result
     LANGUAGE sql STABLE
     AS $$
     WITH most_read AS (
@@ -1461,7 +1509,12 @@ CREATE FUNCTION community_reads.get_most_read(user_account_id bigint, page_numbe
 			JOIN user_page ON user_page.page_id = page.id
 		WHERE
 			since_date IS NOT NULL AND
-			user_page.date_completed >= since_date
+			user_page.date_completed >= since_date AND
+		    core.matches_article_length(
+				listed_community_read.word_count,
+				min_length,
+				max_length
+			)
 		GROUP BY
 			listed_community_read.id
 		UNION ALL
@@ -1471,7 +1524,12 @@ CREATE FUNCTION community_reads.get_most_read(user_account_id bigint, page_numbe
 		FROM community_reads.listed_community_read
 		WHERE
 			since_date IS NULL AND
-			read_count > 0
+			read_count > 0 AND
+		    core.matches_article_length(
+				word_count,
+				min_length,
+				max_length
+			)
 	)
     SELECT
     	articles.*,
@@ -1493,10 +1551,10 @@ $$;
 
 
 --
--- Name: get_top(bigint, integer, integer); Type: FUNCTION; Schema: community_reads; Owner: -
+-- Name: get_top(bigint, integer, integer, integer, integer); Type: FUNCTION; Schema: community_reads; Owner: -
 --
 
-CREATE FUNCTION community_reads.get_top(user_account_id bigint, page_number integer, page_size integer) RETURNS SETOF article_api.article_page_result
+CREATE FUNCTION community_reads.get_top(user_account_id bigint, page_number integer, page_size integer, min_length integer, max_length integer) RETURNS SETOF article_api.article_page_result
     LANGUAGE sql STABLE
     AS $$
     WITH top_read AS (
@@ -1504,7 +1562,14 @@ CREATE FUNCTION community_reads.get_top(user_account_id bigint, page_number inte
             id,
             top_score
         FROM community_reads.listed_community_read
-        WHERE top_score > 0
+        WHERE (
+			top_score > 0 AND
+			core.matches_article_length(
+				word_count,
+				min_length,
+				max_length
+			)
+		)
 	)
     SELECT
     	articles.*,
@@ -1536,15 +1601,25 @@ CREATE FUNCTION community_reads.set_aotd() RETURNS void
 	SET aotd_timestamp = utc_now()
 	WHERE id = (
 		SELECT id
-		FROM
-			community_reads.community_read
-			JOIN article_api.article_pages ON article_pages.article_id = community_read.id
+		FROM community_reads.community_read
 		WHERE
 			aotd_timestamp IS NULL AND
-			word_count >= (184 * 5)
+			core.matches_article_length(word_count, 5, NULL)
 		ORDER BY hot_score DESC
 		LIMIT 1
 	);
+$$;
+
+
+--
+-- Name: estimate_article_length(integer); Type: FUNCTION; Schema: core; Owner: -
+--
+
+CREATE FUNCTION core.estimate_article_length(word_count integer) RETURNS integer
+    LANGUAGE sql IMMUTABLE
+    AS $$
+    -- using integer division is equivalent to floor
+    SELECT greatest(1, word_count / 184);
 $$;
 
 
@@ -1606,6 +1681,27 @@ CREATE FUNCTION core.local_now(time_zone_name text) RETURNS timestamp without ti
     LANGUAGE sql STABLE
     AS $$
 	SELECT now() AT TIME ZONE time_zone_name;
+$$;
+
+
+--
+-- Name: matches_article_length(integer, integer, integer); Type: FUNCTION; Schema: core; Owner: -
+--
+
+CREATE FUNCTION core.matches_article_length(word_count integer, min_length integer, max_length integer) RETURNS boolean
+    LANGUAGE sql IMMUTABLE
+    AS $$
+    SELECT (
+    	CASE WHEN min_length IS NOT NULL
+        THEN (SELECT core.estimate_article_length(word_count)) >= min_length
+        ELSE TRUE
+        END
+	) AND (
+	    CASE WHEN max_length IS NOT NULL
+	    THEN (SELECT core.estimate_article_length(word_count)) < max_length + 1
+	    ELSE TRUE
+	    END
+	);
 $$;
 
 
@@ -2319,6 +2415,7 @@ CREATE VIEW article_api.user_article_rating AS
 CREATE VIEW community_reads.community_read AS
  SELECT article.id,
     article.aotd_timestamp,
+    article.word_count,
     article.hot_score,
     article.top_score,
     article.comment_count,
@@ -2334,6 +2431,7 @@ CREATE VIEW community_reads.community_read AS
 
 CREATE VIEW community_reads.listed_community_read AS
  SELECT community_read.id,
+    community_read.word_count,
     community_read.hot_score,
     community_read.top_score,
     community_read.comment_count,
@@ -3291,6 +3389,13 @@ CREATE INDEX article_read_count_idx ON core.article USING btree (read_count DESC
 --
 
 CREATE INDEX article_top_score_idx ON core.article USING btree (top_score DESC);
+
+
+--
+-- Name: article_word_count_idx; Type: INDEX; Schema: core; Owner: -
+--
+
+CREATE INDEX article_word_count_idx ON core.article USING btree (word_count);
 
 
 --

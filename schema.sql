@@ -2,8 +2,8 @@
 -- PostgreSQL database dump
 --
 
--- Dumped from database version 9.6.9
--- Dumped by pg_dump version 11.2
+-- Dumped from database version 9.6.8
+-- Dumped by pg_dump version 10.3
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -62,6 +62,20 @@ CREATE SCHEMA stats_api;
 --
 
 CREATE SCHEMA user_account_api;
+
+
+--
+-- Name: plpgsql; Type: EXTENSION; Schema: -; Owner: -
+--
+
+CREATE EXTENSION IF NOT EXISTS plpgsql WITH SCHEMA pg_catalog;
+
+
+--
+-- Name: EXTENSION plpgsql; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON EXTENSION plpgsql IS 'PL/pgSQL procedural language';
 
 
 --
@@ -264,7 +278,10 @@ CREATE FUNCTION analytics.get_key_metrics(start_date timestamp without time zone
 					analytics->'client'->>'mode' = 'App' OR
 					analytics->'client'->>'type' = 'ios/app'
 				) AS app_count,
-				count(*) FILTER (WHERE analytics->'client'->>'mode' = 'Browser') AS browser_count,
+				count(*) FILTER (WHERE
+				    analytics->'client'->>'mode' = 'Browser' OR
+				    analytics->'client'->>'type' = 'web/extension'
+				) AS browser_count,
 				count(*) FILTER (WHERE analytics IS NULL) AS unknown_count
 			FROM
 				comment

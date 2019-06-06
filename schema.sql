@@ -267,8 +267,8 @@ CREATE FUNCTION analytics.get_key_metrics(start_date timestamp without time zone
 				count(*) FILTER (WHERE analytics->'client'->>'type' = 'web/extension') AS browser_count,
 				count(*) FILTER (WHERE analytics IS NULL) AS unknown_count
 			FROM
-				user_page
-				JOIN range ON user_page.date_completed >= range.day AND user_page.date_completed < range.next_day
+				user_article
+				JOIN range ON user_article.date_completed >= range.day AND user_article.date_completed < range.next_day
 			GROUP BY range.day
 		) AS reads ON reads.day = range.day
 		LEFT JOIN (
@@ -518,12 +518,12 @@ $$;
 
 
 --
--- Name: user_page; Type: TABLE; Schema: core; Owner: -
+-- Name: user_article; Type: TABLE; Schema: core; Owner: -
 --
 
-CREATE TABLE core.user_page (
+CREATE TABLE core.user_article (
     id bigint NOT NULL,
-    page_id bigint NOT NULL,
+    article_id bigint NOT NULL,
     user_account_id bigint NOT NULL,
     date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
     last_modified timestamp without time zone,
@@ -536,25 +536,25 @@ CREATE TABLE core.user_page (
 
 
 --
--- Name: create_user_page(bigint, bigint, integer, text); Type: FUNCTION; Schema: article_api; Owner: -
+-- Name: create_user_article(bigint, bigint, integer, text); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
-CREATE FUNCTION article_api.create_user_page(page_id bigint, user_account_id bigint, readable_word_count integer, analytics text) RETURNS core.user_page
+CREATE FUNCTION article_api.create_user_article(article_id bigint, user_account_id bigint, readable_word_count integer, analytics text) RETURNS core.user_article
     LANGUAGE sql
     AS $$
-	INSERT INTO user_page (
-		page_id,
+	INSERT INTO user_article (
+		article_id,
 		user_account_id,
 		read_state,
 		readable_word_count,
 		analytics
 	)
 	VALUES (
-		create_user_page.page_id,
-		create_user_page.user_account_id,
-		ARRAY[(SELECT -create_user_page.readable_word_count)],
-		create_user_page.readable_word_count,
-	    create_user_page.analytics::json
+		create_user_article.article_id,
+		create_user_article.user_account_id,
+		ARRAY[(SELECT -create_user_article.readable_word_count)],
+		create_user_article.readable_word_count,
+	    create_user_article.analytics::json
 	)
 	RETURNING *;
 $$;
@@ -633,7 +633,7 @@ CREATE FUNCTION article_api.get_article_history(user_account_id bigint, page_num
 					date_created,
 					last_modified,
 					article_id
-				FROM article_api.user_article_pages
+				FROM user_article
 				WHERE user_account_id = get_article_history.user_account_id
 			) AS user_article
 			FULL JOIN (
@@ -691,16 +691,16 @@ CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC articl
 		article.word_count::bigint,
 		article.comment_count::bigint,
 		article.read_count::bigint,
-		user_article_pages.date_created,
+		user_article.date_created,
 		coalesce(
 		   article_api.get_percent_complete(
-		      user_article_pages.readable_word_count,
-		      user_article_pages.words_read
+		      user_article.readable_word_count,
+		      user_article.words_read
 		   ),
 		   0
 		) AS percent_complete,
 		coalesce(
-		   user_article_pages.date_completed IS NOT NULL,
+		   user_article.date_completed IS NOT NULL,
 		   FALSE
 		) AS is_read,
 		star.date_starred,
@@ -721,10 +721,10 @@ CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC articl
 			article_tags.article_id = article.id AND
 			article_tags.article_id = ANY (article_ids)
 		)
-		LEFT JOIN article_api.user_article_pages ON (
-			user_article_pages.user_account_id = get_articles.user_account_id AND
-			user_article_pages.article_id = article.id AND
-			user_article_pages.article_id = ANY (article_ids)
+		LEFT JOIN user_article ON (
+			user_article.user_account_id = get_articles.user_account_id AND
+			user_article.article_id = article.id AND
+			user_article.article_id = ANY (article_ids)
 		)
 		LEFT JOIN star ON (
 			star.user_account_id = get_articles.user_account_id AND
@@ -841,17 +841,30 @@ $$;
 
 
 --
--- Name: get_user_page(bigint, bigint); Type: FUNCTION; Schema: article_api; Owner: -
+-- Name: get_user_article(bigint); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
-CREATE FUNCTION article_api.get_user_page(page_id bigint, user_account_id bigint) RETURNS SETOF core.user_page
+CREATE FUNCTION article_api.get_user_article(user_article_id bigint) RETURNS SETOF core.user_article
     LANGUAGE sql STABLE
     AS $$
 	SELECT *
-	FROM user_page
+	FROM user_article
+	WHERE id = get_user_article.user_article_id;
+$$;
+
+
+--
+-- Name: get_user_article(bigint, bigint); Type: FUNCTION; Schema: article_api; Owner: -
+--
+
+CREATE FUNCTION article_api.get_user_article(article_id bigint, user_account_id bigint) RETURNS SETOF core.user_article
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT *
+	FROM user_article
 	WHERE (
-		page_id = get_user_page.page_id AND
-		user_account_id = get_user_page.user_account_id
+		article_id = get_user_article.article_id AND
+		user_account_id = get_user_article.user_account_id
 	);
 $$;
 
@@ -980,11 +993,9 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
 				FROM comment
 				WHERE date_created > utc_now() - '1 month'::interval
 				UNION
-				SELECT DISTINCT page.article_id AS id
-				FROM
-					page
-					JOIN user_page ON user_page.page_id = page.id
-				WHERE user_page.date_completed > utc_now() - '1 month'::interval
+				SELECT DISTINCT article_id AS id
+				FROM user_article
+				WHERE date_completed > utc_now() - '1 month'::interval
 			) AS scorable_article
 			JOIN article ON article.id = scorable_article.id
 			LEFT JOIN (
@@ -1029,7 +1040,7 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
 					SELECT
 						article_id,
 						utc_now() - date_completed AS age
-					FROM article_api.user_article_pages
+					FROM user_article
 					WHERE date_completed IS NOT NULL
 				) AS read
 				GROUP BY article_id
@@ -1102,83 +1113,103 @@ $$;
 -- Name: update_read_progress(bigint, integer[], text); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
-CREATE FUNCTION article_api.update_read_progress(user_page_id bigint, read_state integer[], analytics text) RETURNS core.user_page
+CREATE FUNCTION article_api.update_read_progress(user_article_id bigint, read_state integer[], analytics text) RETURNS core.user_article
     LANGUAGE plpgsql
     AS $$
 <<locals>>
 DECLARE
-   -- calculate the words read from the read state
+   	-- utc timestamp
+   	utc_now CONSTANT timestamp NOT NULL := utc_now();
+   	-- calculate the words read from the read state
 	words_read CONSTANT int NOT NULL := (
 		SELECT sum(n)
 		FROM unnest(read_state) AS n
 		WHERE n > 0
 	);
-    -- local user_page
-	current_user_page user_page;
+	-- local user_article
+	current_user_article user_article;
+	-- progress since last commit
+	words_read_since_last_commit int;
 BEGIN
-    -- read and lock the existing user_page
-    SELECT *
-    INTO locals.current_user_page
-	FROM user_page
-	WHERE user_page.id = update_read_progress.user_page_id
+    -- read and lock the existing user_article
+	SELECT *
+	INTO locals.current_user_article
+	FROM user_article
+	WHERE user_article.id = update_read_progress.user_article_id
 	FOR UPDATE;
 	-- only update if more words have been read
-	IF words_read > locals.current_user_page.words_read
+	IF locals.words_read > locals.current_user_article.words_read
 	THEN
+	   	-- calculate the words read since the last commit
+	   	words_read_since_last_commit = locals.words_read - current_user_article.words_read;
 		-- update the progress
-		UPDATE user_page
+	   	INSERT INTO user_article_progress
+			(user_account_id, article_id, period, words_read, client_type)
+	   	VALUES
+	   	(
+	   		locals.current_user_article.user_account_id,
+	   	 	locals.current_user_article.article_id,
+				(
+					date_trunc('hour', locals.utc_now) +
+					make_interval(mins => floor(extract('minute' FROM locals.utc_now) / 15)::int * 15)
+				),
+	   		words_read_since_last_commit,
+	   		update_read_progress.analytics::json->'client'->'type'
+		)
+		ON CONFLICT
+		   (user_account_id, article_id, period)
+		DO UPDATE
+			SET words_read = user_article_progress.words_read + words_read_since_last_commit;
+	  	-- update the user_article
+		UPDATE user_article
 		SET
 			read_state = update_read_progress.read_state,
 			words_read = locals.words_read,
-			last_modified = utc_now(),
-		    analytics = update_read_progress.analytics::json
-		WHERE user_page.id = update_read_progress.user_page_id
+			last_modified = locals.utc_now,
+			analytics = update_read_progress.analytics::json
+		WHERE user_article.id = update_read_progress.user_article_id
 		RETURNING *
-		INTO locals.current_user_page;
+		INTO locals.current_user_article;
 		-- check if this update completed the page
 		IF
-			locals.current_user_page.date_completed IS NULL AND
+			locals.current_user_article.date_completed IS NULL AND
 			(
 				SELECT article_api.get_percent_complete(
-					locals.current_user_page.readable_word_count,
+					locals.current_user_article.readable_word_count,
 					locals.words_read
 				) >= 90
 			)
 		THEN
 			-- set date_completed
-			UPDATE user_page
-			SET date_completed = user_page.last_modified
-			WHERE user_page.id = update_read_progress.user_page_id
+			UPDATE user_article
+			SET date_completed = user_article.last_modified
+			WHERE user_article.id = update_read_progress.user_article_id
 			RETURNING *
-			INTO locals.current_user_page;
+			INTO locals.current_user_article;
 			-- update the cached article read count
 			UPDATE article
 			SET read_count = read_count + 1
-			WHERE id = (
-					SELECT article_id
-					FROM page
-					WHERE id = locals.current_user_page.page_id
-				);
+			WHERE id = locals.current_user_article.article_id;
 		END IF;
 	END IF;
 	-- return
-	RETURN locals.current_user_page;
+	RETURN locals.current_user_article;
 END;
 $$;
 
 
 --
--- Name: update_user_page(bigint, integer, integer[]); Type: FUNCTION; Schema: article_api; Owner: -
+-- Name: update_user_article(bigint, integer, integer[]); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
-CREATE FUNCTION article_api.update_user_page(user_page_id bigint, readable_word_count integer, read_state integer[]) RETURNS core.user_page
+CREATE FUNCTION article_api.update_user_article(user_article_id bigint, readable_word_count integer, read_state integer[]) RETURNS core.user_article
     LANGUAGE sql
     AS $$
-	UPDATE user_page
+	UPDATE user_article
 	SET
-		readable_word_count = update_user_page.readable_word_count,
-		read_state = update_user_page.read_state
-	WHERE user_page.id = update_user_page.user_page_id
+		readable_word_count = update_user_article.readable_word_count,
+		read_state = update_user_article.read_state
+	WHERE user_article.id = update_user_article.user_article_id
 	RETURNING *;
 $$;
 
@@ -1523,11 +1554,10 @@ CREATE FUNCTION community_reads.get_most_read(user_account_id bigint, page_numbe
 			count(*) AS read_count
 		FROM
 			community_reads.listed_community_read
-			JOIN page ON page.article_id = listed_community_read.id
-			JOIN user_page ON user_page.page_id = page.id
+			JOIN user_article ON user_article.article_id = listed_community_read.id
 		WHERE
 			since_date IS NOT NULL AND
-			user_page.date_completed >= since_date AND
+			user_article.date_completed >= since_date AND
 		    core.matches_article_length(
 				listed_community_read.word_count,
 				min_length,
@@ -1636,46 +1666,36 @@ $$;
 CREATE FUNCTION core.estimate_article_length(word_count integer) RETURNS integer
     LANGUAGE sql IMMUTABLE
     AS $$
-    -- using integer division is equivalent to floor
-    SELECT greatest(1, word_count / 184);
+    SELECT greatest(1, estimate_reading_time(word_count))::int;
 $$;
 
 
 --
--- Name: generate_local_to_utc_date_series(date, date, integer, text); Type: FUNCTION; Schema: core; Owner: -
+-- Name: estimate_reading_time(numeric); Type: FUNCTION; Schema: core; Owner: -
 --
 
-CREATE FUNCTION core.generate_local_to_utc_date_series(start date, stop date, day_step_count integer, time_zone_name text) RETURNS TABLE(local_day date, utc_range tsrange)
+CREATE FUNCTION core.estimate_reading_time(word_count numeric) RETURNS integer
     LANGUAGE sql IMMUTABLE
     AS $$
-	WITH day_pair AS (
-		SELECT
-			cast(local_day AS date) AS local_day,
-			make_timestamptz(
-				extract(year FROM local_day)::int,
-				extract(month FROM local_day)::int,
-				extract(day FROM local_day)::int,
-				extract(hour FROM local_day)::int,
-				extract(minute FROM local_day)::int,
-				extract(second FROM local_day)::int,
-				generate_local_to_utc_date_series.time_zone_name
-			) AT TIME ZONE 'UTC' AS utc_day
-		FROM
-			generate_series(
-				start,
-				stop,
-				make_interval(
-					days => generate_local_to_utc_date_series.day_step_count
-				)
-			) AS local_day
-	)
+    SELECT greatest(0, coalesce(word_count, 0) / 184)::int;
+$$;
+
+
+--
+-- Name: generate_local_timestamp_to_utc_range_series(timestamp with time zone, timestamp with time zone, interval, text); Type: FUNCTION; Schema: core; Owner: -
+--
+
+CREATE FUNCTION core.generate_local_timestamp_to_utc_range_series(start timestamp with time zone, stop timestamp with time zone, step interval, time_zone_name text) RETURNS TABLE(local_timestamp timestamp with time zone, utc_range tsrange)
+    LANGUAGE sql IMMUTABLE
+    AS $$
 	SELECT
-		local_day,
+		local_timestamp,
 		tsrange(
-			utc_day,
-			utc_day + '1 day'::interval
-		)
-	FROM day_pair;
+			local_to_utc_timestamp(local_timestamp, time_zone_name),
+			local_to_utc_timestamp(local_timestamp + step, time_zone_name)
+		) AS utc_range
+	FROM
+    	generate_series(start, stop, step) AS local_timestamp;
 $$;
 
 
@@ -1703,6 +1723,36 @@ $$;
 
 
 --
+-- Name: local_to_utc_timestamp(timestamp with time zone, text); Type: FUNCTION; Schema: core; Owner: -
+--
+
+CREATE FUNCTION core.local_to_utc_timestamp(local_timestamp timestamp with time zone, time_zone_name text) RETURNS timestamp without time zone
+    LANGUAGE sql IMMUTABLE
+    AS $$
+	SELECT make_timestamptz_at_time_zone(local_timestamp, time_zone_name) AT TIME ZONE 'UTC';
+$$;
+
+
+--
+-- Name: make_timestamptz_at_time_zone(timestamp with time zone, text); Type: FUNCTION; Schema: core; Owner: -
+--
+
+CREATE FUNCTION core.make_timestamptz_at_time_zone(input_timestamp timestamp with time zone, time_zone_name text) RETURNS timestamp with time zone
+    LANGUAGE sql IMMUTABLE
+    AS $$
+	SELECT make_timestamptz(
+		extract(YEAR FROM input_timestamp)::int,
+		extract(MONTH FROM input_timestamp)::int,
+		extract(DAY FROM input_timestamp)::int,
+		extract(HOUR FROM input_timestamp)::int,
+		extract(MINUTE FROM input_timestamp)::int,
+		extract(SECOND FROM input_timestamp),
+		time_zone_name
+	);
+$$;
+
+
+--
 -- Name: matches_article_length(integer, integer, integer); Type: FUNCTION; Schema: core; Owner: -
 --
 
@@ -1720,6 +1770,17 @@ CREATE FUNCTION core.matches_article_length(word_count integer, min_length integ
 	    ELSE TRUE
 	    END
 	);
+$$;
+
+
+--
+-- Name: utc_to_local_timestamp(timestamp with time zone, text); Type: FUNCTION; Schema: core; Owner: -
+--
+
+CREATE FUNCTION core.utc_to_local_timestamp(utc_timestamp timestamp with time zone, time_zone_name text) RETURNS timestamp without time zone
+    LANGUAGE sql IMMUTABLE
+    AS $$
+	SELECT make_timestamptz_at_time_zone(utc_timestamp, 'UTC') AT TIME ZONE time_zone_name;
 $$;
 
 
@@ -1743,42 +1804,41 @@ CREATE FUNCTION stats_api.get_current_streak(user_account_id bigint) RETURNS big
 	streak_day AS (
 		WITH streak_start_day AS (
 			SELECT *
-			FROM generate_local_to_utc_date_series(
+			FROM generate_local_timestamp_to_utc_range_series(
 				cast(local_now((SELECT name FROM user_time_zone)) - '1 day'::interval AS date),
 				cast(local_now((SELECT name FROM user_time_zone)) AS date),
-				1,
+				'1 day'::interval,
 				(SELECT name FROM user_time_zone)
 			)
 		),
 		streak_start_daily_read_count AS (
 			SELECT
-				streak_start_day.local_day,
+				streak_start_day.local_timestamp,
 				streak_start_day.utc_range,
 				count(*) FILTER (WHERE date_completed IS NOT NULL) AS read_count
 			FROM
 				streak_start_day
 				LEFT JOIN (
 					SELECT
-						user_page.date_completed
+						user_article.date_completed
 					FROM
-						user_page
-						JOIN page ON user_page.page_id = page.id
+						user_article
 					WHERE
-						user_page.user_account_id = get_current_streak.user_account_id AND
-						user_page.date_completed <@ tsrange(
-							lower((SELECT utc_range FROM streak_start_day ORDER BY local_day LIMIT 1)),
-							upper((SELECT utc_range FROM streak_start_day ORDER BY local_day DESC LIMIT 1))
+						user_article.user_account_id = get_current_streak.user_account_id AND
+						user_article.date_completed <@ tsrange(
+							lower((SELECT utc_range FROM streak_start_day ORDER BY local_timestamp LIMIT 1)),
+							upper((SELECT utc_range FROM streak_start_day ORDER BY local_timestamp DESC LIMIT 1))
 						)
-				) AS user_page ON streak_start_day.utc_range @> user_page.date_completed
+				) AS user_article_group ON streak_start_day.utc_range @> user_article_group.date_completed
 			GROUP BY
-				streak_start_day.local_day, streak_start_day.utc_range
+				streak_start_day.local_timestamp, streak_start_day.utc_range
 		),
 		streak_start_qualified_day AS (
 			SELECT
-				local_day,
+				local_timestamp,
 				utc_range,
 				CASE WHEN
-					local_day = first_value(local_day) OVER local_day_desc AND
+					local_timestamp = first_value(local_timestamp) OVER local_day_desc AND
 					lead(read_count) OVER local_day_desc > 0
 					THEN TRUE
 					ELSE read_count > 0
@@ -1786,10 +1846,10 @@ CREATE FUNCTION stats_api.get_current_streak(user_account_id bigint) RETURNS big
 			FROM
 				streak_start_daily_read_count
 			WINDOW
-				local_day_desc AS (ORDER BY local_day DESC)
+				local_day_desc AS (ORDER BY local_timestamp DESC)
 		)
 		SELECT
-			local_day,
+			local_timestamp,
 			utc_range
 		FROM streak_start_qualified_day
 		WHERE is_qualifying_day
@@ -1797,7 +1857,7 @@ CREATE FUNCTION stats_api.get_current_streak(user_account_id bigint) RETURNS big
 		(
 			WITH next_day AS (
 				SELECT
-					cast(local_day - '1 day'::interval AS date) AS local_day,
+					cast(local_timestamp - '1 day'::interval AS date) AS local_day,
 					tsrange(
 						lower(utc_range) - '1 day'::interval,
 						upper(utc_range) - '1 day'::interval
@@ -1810,15 +1870,14 @@ CREATE FUNCTION stats_api.get_current_streak(user_account_id bigint) RETURNS big
 				(SELECT local_day FROM next_day),
 				(SELECT utc_range FROM next_day)
 			FROM
-				user_page
-				JOIN page ON user_page.page_id = page.id
+				user_article
 			WHERE
-				user_page.user_account_id = get_current_streak.user_account_id AND
-				user_page.date_completed <@ (SELECT utc_range FROM next_day)
+				user_article.user_account_id = get_current_streak.user_account_id AND
+				user_article.date_completed <@ (SELECT utc_range FROM next_day)
 		)
 	)
 	SELECT
-		count(DISTINCT local_day)
+		count(DISTINCT local_timestamp)
 	FROM
 		streak_day;
 $$;
@@ -1864,6 +1923,121 @@ $$;
 
 
 --
+-- Name: get_daily_reading_time_totals(bigint, integer); Type: FUNCTION; Schema: stats_api; Owner: -
+--
+
+CREATE FUNCTION stats_api.get_daily_reading_time_totals(user_account_id bigint, number_of_days integer) RETURNS TABLE(date date, minutes_reading integer, minutes_reading_to_completion integer)
+    LANGUAGE sql STABLE
+    AS $$
+    WITH user_time_zone AS (
+		SELECT name
+		FROM time_zone
+		WHERE
+			id = (
+				SELECT time_zone_id
+				FROM user_account
+				WHERE id = user_account_id
+			)
+	),
+	user_local_day AS (
+		SELECT local_now((SELECT name FROM user_time_zone))::date AS date
+	)
+	SELECT
+		day.local_timestamp::date AS date,
+		estimate_reading_time(sum(user_article_progress.words_read)) AS minutes_reading,
+		estimate_reading_time(
+			sum(user_article_progress.words_read) FILTER (WHERE user_article.date_completed IS NOT NULL)
+		) AS minutes_reading_to_completion
+	FROM
+		generate_local_timestamp_to_utc_range_series(
+		   start => ((SELECT date FROM user_local_day) - make_interval(days => number_of_days))::date,
+		   stop => (SELECT date FROM user_local_day),
+		   step => '1 day'::interval,
+		   time_zone_name => (SELECT name FROM user_time_zone)
+		) AS day
+		LEFT JOIN user_article_progress
+			ON (
+			   user_article_progress.user_account_id = get_daily_reading_time_totals.user_account_id AND
+			   user_article_progress.period <@ day.utc_range
+			)
+		LEFT JOIN user_article
+			ON (
+				user_article.user_account_id = get_daily_reading_time_totals.user_account_id AND
+				user_article.article_id = user_article_progress.article_id
+			)
+	GROUP BY
+		day.local_timestamp
+    ORDER BY
+    	date;
+$$;
+
+
+--
+-- Name: get_monthly_reading_time_totals(bigint, integer); Type: FUNCTION; Schema: stats_api; Owner: -
+--
+
+CREATE FUNCTION stats_api.get_monthly_reading_time_totals(user_account_id bigint, number_of_months integer) RETURNS TABLE(date date, minutes_reading integer, minutes_reading_to_completion integer)
+    LANGUAGE sql STABLE
+    AS $$
+	WITH target_user AS (
+		SELECT
+			date_created,
+			time_zone_id
+		FROM user_account
+		WHERE id = user_account_id
+	),
+	user_time_zone AS (
+		SELECT name
+		FROM time_zone
+		WHERE id = (SELECT time_zone_id FROM target_user)
+	),
+	user_local_month AS (
+		SELECT date_trunc('month', local_now((SELECT name FROM user_time_zone)))::date AS date
+	)
+	SELECT
+		month.local_timestamp::date AS date,
+		estimate_reading_time(sum(user_article_progress.words_read)) AS minutes_reading,
+		estimate_reading_time(
+			sum(user_article_progress.words_read) FILTER (WHERE user_article.date_completed IS NOT NULL)
+		) AS minutes_reading_to_completion
+	FROM
+		generate_local_timestamp_to_utc_range_series(
+			start => (
+			    CASE WHEN number_of_months IS NOT NULL
+			    	THEN (SELECT date FROM user_local_month) - make_interval(months => number_of_months)
+			        ELSE (
+			            SELECT date_trunc(
+			                'month',
+			                utc_to_local_timestamp(
+			                    (SELECT date_created FROM target_user),
+			                    (SELECT name FROM user_time_zone)
+			                )
+			            )
+			        )
+		    	END
+			),
+			stop => (SELECT date FROM user_local_month),
+			step => '1 month'::interval,
+			time_zone_name => (SELECT name FROM user_time_zone)
+		) AS month
+		LEFT JOIN user_article_progress
+			ON (
+			   user_article_progress.user_account_id = get_monthly_reading_time_totals.user_account_id AND
+			   user_article_progress.period <@ month.utc_range
+			)
+		LEFT JOIN user_article
+			ON (
+				user_article.user_account_id = get_monthly_reading_time_totals.user_account_id AND
+				user_article.article_id = user_article_progress.article_id
+			)
+	GROUP BY
+		month.local_timestamp
+    ORDER BY
+    	date;
+$$;
+
+
+--
 -- Name: get_read_count_leaderboard(integer); Type: FUNCTION; Schema: stats_api; Owner: -
 --
 
@@ -1874,10 +2048,10 @@ CREATE FUNCTION stats_api.get_read_count_leaderboard(max_count integer) RETURNS 
 		user_account.name,
 		count(*) AS read_count
 	FROM
-		user_page
-		JOIN user_account ON user_page.user_account_id = user_account.id
+		user_article
+		JOIN user_account ON user_article.user_account_id = user_account.id
 	WHERE
-		user_page.date_completed IS NOT NULL
+		user_article.date_completed IS NOT NULL
 	GROUP BY
 		user_account.id
 	ORDER BY
@@ -1900,7 +2074,7 @@ CREATE FUNCTION stats_api.get_user_stats(user_account_id bigint) RETURNS TABLE(r
 			count(*) AS count,
 			dense_rank() OVER (ORDER BY count(*) DESC) AS rank
 		FROM
-			user_page
+			user_article
 		WHERE
 			date_completed IS NOT NULL
 		GROUP BY
@@ -2393,23 +2567,6 @@ CREATE VIEW article_api.article_tags AS
    FROM (core.tag
      JOIN core.article_tag ON ((article_tag.tag_id = tag.id)))
   GROUP BY article_tag.article_id;
-
-
---
--- Name: user_article_pages; Type: VIEW; Schema: article_api; Owner: -
---
-
-CREATE VIEW article_api.user_article_pages AS
- SELECT sum(user_page.readable_word_count) AS readable_word_count,
-    sum(user_page.words_read) AS words_read,
-    min(user_page.date_created) AS date_created,
-    max(user_page.last_modified) AS last_modified,
-    max(user_page.date_completed) AS date_completed,
-    user_page.user_account_id,
-    page.article_id
-   FROM (core.user_page
-     JOIN core.page ON ((page.id = user_page.page_id)))
-  GROUP BY user_page.user_account_id, page.article_id;
 
 
 --
@@ -2955,6 +3112,39 @@ ALTER SEQUENCE core.user_account_id_seq OWNED BY core.user_account.id;
 
 
 --
+-- Name: user_article_progress; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.user_article_progress (
+    id bigint NOT NULL,
+    user_account_id bigint NOT NULL,
+    article_id bigint NOT NULL,
+    period timestamp without time zone NOT NULL,
+    words_read integer NOT NULL,
+    client_type text
+);
+
+
+--
+-- Name: user_article_progress_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.user_article_progress_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: user_article_progress_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.user_article_progress_id_seq OWNED BY core.user_article_progress.id;
+
+
+--
 -- Name: user_page_id_seq; Type: SEQUENCE; Schema: core; Owner: -
 --
 
@@ -2970,7 +3160,7 @@ CREATE SEQUENCE core.user_page_id_seq
 -- Name: user_page_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
 --
 
-ALTER SEQUENCE core.user_page_id_seq OWNED BY core.user_page.id;
+ALTER SEQUENCE core.user_page_id_seq OWNED BY core.user_article.id;
 
 
 --
@@ -3121,10 +3311,17 @@ ALTER TABLE ONLY core.user_account ALTER COLUMN id SET DEFAULT nextval('core.use
 
 
 --
--- Name: user_page id; Type: DEFAULT; Schema: core; Owner: -
+-- Name: user_article id; Type: DEFAULT; Schema: core; Owner: -
 --
 
-ALTER TABLE ONLY core.user_page ALTER COLUMN id SET DEFAULT nextval('core.user_page_id_seq'::regclass);
+ALTER TABLE ONLY core.user_article ALTER COLUMN id SET DEFAULT nextval('core.user_page_id_seq'::regclass);
+
+
+--
+-- Name: user_article_progress id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.user_article_progress ALTER COLUMN id SET DEFAULT nextval('core.user_article_progress_id_seq'::regclass);
 
 
 --
@@ -3360,10 +3557,26 @@ ALTER TABLE ONLY core.user_account
 
 
 --
--- Name: user_page user_page_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+-- Name: user_article_progress user_article_progress_pkey; Type: CONSTRAINT; Schema: core; Owner: -
 --
 
-ALTER TABLE ONLY core.user_page
+ALTER TABLE ONLY core.user_article_progress
+    ADD CONSTRAINT user_article_progress_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: user_article_progress user_article_progress_user_account_id_article_id_period_key; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.user_article_progress
+    ADD CONSTRAINT user_article_progress_user_account_id_article_id_period_key UNIQUE (user_account_id, article_id, period);
+
+
+--
+-- Name: user_article user_page_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.user_article
     ADD CONSTRAINT user_page_pkey PRIMARY KEY (id);
 
 
@@ -3445,24 +3658,24 @@ CREATE UNIQUE INDEX user_account_name_key ON core.user_account USING btree (lowe
 
 
 --
+-- Name: user_article_article_id_idx; Type: INDEX; Schema: core; Owner: -
+--
+
+CREATE INDEX user_article_article_id_idx ON core.user_article USING btree (article_id);
+
+
+--
 -- Name: user_page_date_completed_idx; Type: INDEX; Schema: core; Owner: -
 --
 
-CREATE INDEX user_page_date_completed_idx ON core.user_page USING btree (date_completed);
-
-
---
--- Name: user_page_page_id_idx; Type: INDEX; Schema: core; Owner: -
---
-
-CREATE INDEX user_page_page_id_idx ON core.user_page USING btree (page_id);
+CREATE INDEX user_page_date_completed_idx ON core.user_article USING btree (date_completed);
 
 
 --
 -- Name: user_page_user_account_id_idx; Type: INDEX; Schema: core; Owner: -
 --
 
-CREATE INDEX user_page_user_account_id_idx ON core.user_page USING btree (user_account_id);
+CREATE INDEX user_page_user_account_id_idx ON core.user_article USING btree (user_account_id);
 
 
 --
@@ -3697,18 +3910,34 @@ ALTER TABLE ONLY core.user_account
 
 
 --
--- Name: user_page user_page_page_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+-- Name: user_article user_article_article_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
 --
 
-ALTER TABLE ONLY core.user_page
-    ADD CONSTRAINT user_page_page_id_fkey FOREIGN KEY (page_id) REFERENCES core.page(id);
+ALTER TABLE ONLY core.user_article
+    ADD CONSTRAINT user_article_article_id_fkey FOREIGN KEY (article_id) REFERENCES core.article(id);
 
 
 --
--- Name: user_page user_page_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+-- Name: user_article_progress user_article_progress_article_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
 --
 
-ALTER TABLE ONLY core.user_page
+ALTER TABLE ONLY core.user_article_progress
+    ADD CONSTRAINT user_article_progress_article_id_fkey FOREIGN KEY (article_id) REFERENCES core.article(id);
+
+
+--
+-- Name: user_article_progress user_article_progress_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.user_article_progress
+    ADD CONSTRAINT user_article_progress_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
+
+
+--
+-- Name: user_article user_page_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.user_article
     ADD CONSTRAINT user_page_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
 
 

@@ -223,13 +223,13 @@ CREATE TYPE core.user_account_role AS ENUM (
 -- Name: get_key_metrics(timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: analytics; Owner: -
 --
 
-CREATE FUNCTION analytics.get_key_metrics(start_date timestamp without time zone, end_date timestamp without time zone) RETURNS TABLE(day timestamp without time zone, user_accounts_app_count bigint, user_accounts_browser_count bigint, user_accounts_unknown_count bigint, reads_app_count bigint, reads_browser_count bigint, reads_unknown_count bigint, comments_app_count bigint, comments_browser_count bigint, comments_unknown_count bigint)
-    LANGUAGE sql
+CREATE FUNCTION analytics.get_key_metrics(start_date timestamp without time zone, end_date timestamp without time zone) RETURNS TABLE(day timestamp without time zone, user_account_app_count bigint, user_account_browser_count bigint, user_account_unknown_count bigint, read_app_count bigint, read_browser_count bigint, read_unknown_count bigint, comment_app_count bigint, comment_browser_count bigint, comment_unknown_count bigint, extension_installation_count bigint, extension_removal_count bigint)
+    LANGUAGE sql STABLE
     AS $$
-	WITH range AS (
+	WITH report_period AS (
 		SELECT
-			date AS day,
-			date + '1 day'::interval AS next_day
+		    date AS day,
+			tsrange(date, date + '1 day'::interval) AS range
 		FROM generate_series(
 		    get_key_metrics.start_date,
 		    get_key_metrics.end_date,
@@ -237,43 +237,45 @@ CREATE FUNCTION analytics.get_key_metrics(start_date timestamp without time zone
 		) AS series (date)
 	)
 	SELECT
-		range.day,
-		coalesce(user_accounts.app_count, 0) AS user_accounts_app_count,
-		coalesce(user_accounts.browser_count, 0) AS user_accounts_browser_count,
-		coalesce(user_accounts.unknown_count, 0) AS user_accounts_unknown_count,
-		coalesce(reads.app_count, 0) AS reads_app_count,
-		coalesce(reads.browser_count, 0) AS reads_browser_count,
-		coalesce(reads.unknown_count, 0) AS reads_unknown_count,
-		coalesce(comments.app_count, 0) AS comments_app_count,
-		coalesce(comments.browser_count, 0) AS comments_browser_count,
-		coalesce(comments.unknown_count, 0) AS comments_unknown_count
+		report_period.day,
+		coalesce(user_account_totals.app_count, 0) AS user_account_app_count,
+		coalesce(user_account_totals.browser_count, 0) AS user_account_browser_count,
+		coalesce(user_account_totals.unknown_count, 0) AS user_account_unknown_count,
+		coalesce(read_totals.app_count, 0) AS read_app_count,
+		coalesce(read_totals.browser_count, 0) AS read_browser_count,
+		coalesce(read_totals.unknown_count, 0) AS read_unknown_count,
+		coalesce(comment_totals.app_count, 0) AS comment_app_count,
+		coalesce(comment_totals.browser_count, 0) AS comment_browser_count,
+		coalesce(comment_totals.unknown_count, 0) AS comment_unknown_count,
+	    coalesce(extension_installation_total.count, 0) AS extension_installation_count,
+	    coalesce(extension_removal_total.count, 0) AS extension_removal_count
 	FROM
-		range
+		report_period
 		LEFT JOIN (
 			SELECT
-				range.day,
+				report_period.day,
 				count(*) FILTER (WHERE analytics->'client'->>'mode' = 'App') AS app_count,
 				count(*) FILTER (WHERE analytics->'client'->>'mode' = 'Browser') AS browser_count,
 				count(*) FILTER (WHERE analytics IS NULL) AS unknown_count
 			FROM
 				user_account
-				JOIN range ON user_account.date_created >= range.day AND user_account.date_created < range.next_day
-			GROUP BY range.day
-		) AS user_accounts ON user_accounts.day = range.day
+				JOIN report_period ON user_account.date_created <@ report_period.range
+			GROUP BY report_period.day
+		) AS user_account_totals ON user_account_totals.day = report_period.day
 		LEFT JOIN (
 			SELECT
-				range.day,
+				report_period.day,
 				count(*) FILTER (WHERE analytics->'client'->>'type' = 'ios/app') AS app_count,
 				count(*) FILTER (WHERE analytics->'client'->>'type' = 'web/extension') AS browser_count,
 				count(*) FILTER (WHERE analytics IS NULL) AS unknown_count
 			FROM
 				user_article
-				JOIN range ON user_article.date_completed >= range.day AND user_article.date_completed < range.next_day
-			GROUP BY range.day
-		) AS reads ON reads.day = range.day
+				JOIN report_period ON user_article.date_completed <@ report_period.range
+			GROUP BY report_period.day
+		) AS read_totals ON read_totals.day = report_period.day
 		LEFT JOIN (
 			SELECT
-				range.day,
+				report_period.day,
 				count(*) FILTER (WHERE
 					analytics->'client'->>'mode' = 'App' OR
 					analytics->'client'->>'type' = 'ios/app'
@@ -285,10 +287,83 @@ CREATE FUNCTION analytics.get_key_metrics(start_date timestamp without time zone
 				count(*) FILTER (WHERE analytics IS NULL) AS unknown_count
 			FROM
 				comment
-				JOIN range ON comment.date_created >= range.day AND comment.date_created < range.next_day
-			GROUP BY range.day
-		) AS comments ON comments.day = range.day
-	ORDER BY range.day DESC;
+				JOIN report_period ON comment.date_created <@ report_period.range
+			GROUP BY report_period.day
+		) AS comment_totals ON comment_totals.day = report_period.day
+		LEFT JOIN (
+			SELECT
+				report_period.day,
+			    count(*) AS count
+			FROM
+				extension_installation
+		    	JOIN report_period ON extension_installation.timestamp <@ report_period.range
+		    GROUP BY
+		    	report_period.day
+		) AS extension_installation_total ON extension_installation_total.day = report_period.day
+		LEFT JOIN (
+			SELECT
+				report_period.day,
+			    count(*) AS count
+			FROM
+				extension_removal
+		    	JOIN report_period ON extension_removal.timestamp <@ report_period.range
+		    GROUP BY
+		    	report_period.day
+		) AS extension_removal_total ON extension_removal_total.day = report_period.day
+	ORDER BY report_period.day DESC;
+$$;
+
+
+--
+-- Name: log_extension_installation(uuid, bigint, text); Type: FUNCTION; Schema: analytics; Owner: -
+--
+
+CREATE FUNCTION analytics.log_extension_installation(installation_id uuid, user_account_id bigint, platform text) RETURNS void
+    LANGUAGE sql
+    AS $$
+    INSERT INTO
+        extension_installation (installation_id, user_account_id, platform)
+    VALUES
+    	(
+    	 	log_extension_installation.installation_id,
+    	 	log_extension_installation.user_account_id,
+    	 	log_extension_installation.platform
+		);
+$$;
+
+
+--
+-- Name: log_extension_removal(uuid, bigint); Type: FUNCTION; Schema: analytics; Owner: -
+--
+
+CREATE FUNCTION analytics.log_extension_removal(installation_id uuid, user_account_id bigint) RETURNS void
+    LANGUAGE sql
+    AS $$
+    INSERT INTO
+        extension_removal (installation_id, user_account_id)
+    VALUES
+    	(
+    	 	log_extension_removal.installation_id,
+    	 	log_extension_removal.user_account_id
+		);
+$$;
+
+
+--
+-- Name: log_extension_removal_feedback(uuid, text); Type: FUNCTION; Schema: analytics; Owner: -
+--
+
+CREATE FUNCTION analytics.log_extension_removal_feedback(installation_id uuid, reason text) RETURNS void
+    LANGUAGE sql
+    AS $$
+    UPDATE
+        extension_removal
+    SET
+    	reason = log_extension_removal_feedback.reason
+    WHERE (
+    	installation_id = log_extension_removal_feedback.installation_id AND
+        reason IS NULL
+	);
 $$;
 
 
@@ -2976,6 +3051,70 @@ ALTER SEQUENCE core.email_share_recipient_id_seq OWNED BY core.email_share_recip
 
 
 --
+-- Name: extension_installation; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.extension_installation (
+    id bigint NOT NULL,
+    "timestamp" timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    installation_id uuid NOT NULL,
+    user_account_id bigint,
+    platform text NOT NULL
+);
+
+
+--
+-- Name: extension_installation_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.extension_installation_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: extension_installation_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.extension_installation_id_seq OWNED BY core.extension_installation.id;
+
+
+--
+-- Name: extension_removal; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.extension_removal (
+    id bigint NOT NULL,
+    "timestamp" timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    installation_id uuid NOT NULL,
+    user_account_id bigint,
+    reason text
+);
+
+
+--
+-- Name: extension_removal_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.extension_removal_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: extension_removal_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.extension_removal_id_seq OWNED BY core.extension_removal.id;
+
+
+--
 -- Name: page_id_seq; Type: SEQUENCE; Schema: core; Owner: -
 --
 
@@ -3270,6 +3409,20 @@ ALTER TABLE ONLY core.email_share_recipient ALTER COLUMN id SET DEFAULT nextval(
 
 
 --
+-- Name: extension_installation id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.extension_installation ALTER COLUMN id SET DEFAULT nextval('core.extension_installation_id_seq'::regclass);
+
+
+--
+-- Name: extension_removal id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.extension_removal ALTER COLUMN id SET DEFAULT nextval('core.extension_removal_id_seq'::regclass);
+
+
+--
 -- Name: page id; Type: DEFAULT; Schema: core; Owner: -
 --
 
@@ -3458,6 +3611,38 @@ ALTER TABLE ONLY core.email_share
 
 ALTER TABLE ONLY core.email_share_recipient
     ADD CONSTRAINT email_share_recipient_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: extension_installation extension_installation_installation_id_key; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.extension_installation
+    ADD CONSTRAINT extension_installation_installation_id_key UNIQUE (installation_id);
+
+
+--
+-- Name: extension_installation extension_installation_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.extension_installation
+    ADD CONSTRAINT extension_installation_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: extension_removal extension_removal_installation_id_key; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.extension_removal
+    ADD CONSTRAINT extension_removal_installation_id_key UNIQUE (installation_id);
+
+
+--
+-- Name: extension_removal extension_removal_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.extension_removal
+    ADD CONSTRAINT extension_removal_pkey PRIMARY KEY (id);
 
 
 --
@@ -3859,6 +4044,30 @@ ALTER TABLE ONLY core.email_share_recipient
 
 ALTER TABLE ONLY core.email_share
     ADD CONSTRAINT email_share_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
+
+
+--
+-- Name: extension_installation extension_installation_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.extension_installation
+    ADD CONSTRAINT extension_installation_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
+
+
+--
+-- Name: extension_removal extension_removal_installation_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.extension_removal
+    ADD CONSTRAINT extension_removal_installation_id_fkey FOREIGN KEY (installation_id) REFERENCES core.extension_installation(installation_id);
+
+
+--
+-- Name: extension_removal extension_removal_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.extension_removal
+    ADD CONSTRAINT extension_removal_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
 
 
 --

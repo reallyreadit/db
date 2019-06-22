@@ -10,7 +10,7 @@ SELECT
 		count(*)::double precision
 	) AS read_impression_ratio
 FROM
-	user_page
+	user_article
 	JOIN page ON user_page.page_id = page.id
 	JOIN article ON page.article_id = article.id
 	JOIN source ON article.source_id = source.id

@@ -1,13 +1,20 @@
 SELECT
-	name,
-	email,
-	receive_reply_email_notifications,
-	receive_reply_desktop_notifications,
-	date_created,
-	role,
-	receive_website_updates,
-	receive_suggested_readings,
-	is_email_confirmed,
-	time_zone_id,
-	time_zone_name
-FROM user_account_api.user_account ORDER BY date_created DESC;
+	user_account.id,
+    user_account.name,
+    user_account.email,
+    user_account.date_created,
+    count(*) FILTER (WHERE user_article.date_completed IS NOT NULL) AS article_completions,
+    max(user_article.last_modified) AS latest_read_activity,
+    mode() WITHIN GROUP (ORDER BY user_article.analytics->'client'->>'type') AS preferred_client_type,
+    time_zone.name AS time_zone
+FROM
+	user_account
+	LEFT JOIN time_zone
+	    ON time_zone.id = user_account.time_zone_id
+	LEFT JOIN user_article
+		ON user_article.user_account_id = user_account.id
+GROUP BY
+	user_account.id,
+    time_zone.id
+ORDER BY
+	user_account.id;

@@ -4265,6 +4265,13 @@ CREATE INDEX user_page_user_account_id_idx ON core.user_article USING btree (use
 
 
 --
+-- Name: current_streak_user_account_id_idx; Type: INDEX; Schema: stats; Owner: -
+--
+
+CREATE UNIQUE INDEX current_streak_user_account_id_idx ON stats.current_streak USING btree (user_account_id);
+
+
+--
 -- Name: article_author article_author_article_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
 --
 

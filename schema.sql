@@ -1097,6 +1097,13 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
 					coalesce(scored_first_comment.score, 0) +
 					(coalesce(reads.score, 0) * greatest(1, core.estimate_article_length(article.word_count) / 7))::int
 				) * (coalesce(article.average_rating_score, 5) / 5)
+			) / (
+				CASE
+				    -- divide articles from billloundy.com by 10
+				    WHEN article.source_id = 7038
+				    THEN 10
+				    ELSE 1
+				END
 			) AS hot,
 			(
 				(

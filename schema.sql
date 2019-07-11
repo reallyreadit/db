@@ -296,9 +296,9 @@ CREATE FUNCTION analytics.get_key_metrics(start_date timestamp without time zone
 		LEFT JOIN (
 			SELECT
 				report_period.day,
-				count(*) FILTER (WHERE analytics->'client'->>'mode' = 'App') AS app_count,
-				count(*) FILTER (WHERE analytics->'client'->>'mode' = 'Browser') AS browser_count,
-				count(*) FILTER (WHERE analytics IS NULL) AS unknown_count
+				count(*) FILTER (WHERE creation_analytics->'client'->>'mode' = 'App') AS app_count,
+				count(*) FILTER (WHERE creation_analytics->'client'->>'mode' = 'Browser') AS browser_count,
+				count(*) FILTER (WHERE creation_analytics IS NULL) AS unknown_count
 			FROM
 				user_account
 				JOIN report_period ON user_account.date_created <@ report_period.range
@@ -353,6 +353,33 @@ CREATE FUNCTION analytics.get_key_metrics(start_date timestamp without time zone
 		    	report_period.day
 		) AS extension_removal_total ON extension_removal_total.day = report_period.day
 	ORDER BY report_period.day DESC;
+$$;
+
+
+--
+-- Name: get_user_account_creations(timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: analytics; Owner: -
+--
+
+CREATE FUNCTION analytics.get_user_account_creations(start_date timestamp without time zone, end_date timestamp without time zone) RETURNS TABLE(id bigint, name text, date_created timestamp without time zone, time_zone_name text, client_mode text, marketing_screen_variant integer, referrer_url text, initial_path text)
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT
+		user_account.id,
+	    user_account.name,
+	    user_account.date_created,
+	    time_zone.name,
+	    user_account.creation_analytics->'client'->>'mode',
+	    (user_account.creation_analytics->>'marketing_screen_variant')::int,
+	    user_account.creation_analytics->>'referrer_url',
+	    user_account.creation_analytics->>'initial_path'
+	FROM
+		user_account
+    	LEFT JOIN time_zone
+    		ON time_zone.id = user_account.time_zone_id
+    WHERE
+    	user_account.date_created <@ tsrange(start_date, end_date)
+    ORDER BY
+    	user_account.date_created DESC
 $$;
 
 
@@ -519,7 +546,7 @@ CREATE TABLE core.user_account (
     receive_website_updates boolean DEFAULT true,
     receive_suggested_readings boolean DEFAULT true,
     time_zone_id bigint,
-    analytics jsonb,
+    creation_analytics jsonb,
     CONSTRAINT user_account_email_valid CHECK (((email)::text ~~ '%@%'::text)),
     CONSTRAINT user_account_name_valid CHECK (((name)::text ~ similar_escape('[A-Za-z0-9\-_]+'::text, NULL::text)))
 );
@@ -2714,7 +2741,7 @@ DECLARE
 	user_account_id bigint;
 BEGIN
 	INSERT INTO
-	    user_account (name, email, password_hash, password_salt, time_zone_id, analytics)
+	    user_account (name, email, password_hash, password_salt, time_zone_id, creation_analytics)
 	VALUES
 		(trim(name), trim(email), password_hash, password_salt, time_zone_id, analytics::json)
 	RETURNING id INTO user_account_id;

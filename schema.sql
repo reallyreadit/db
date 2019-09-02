@@ -51,6 +51,13 @@ CREATE SCHEMA core;
 
 
 --
+-- Name: social; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA social;
+
+
+--
 -- Name: stats; Type: SCHEMA; Schema: -; Owner: -
 --
 
@@ -110,7 +117,8 @@ CREATE TYPE article_api.article AS (
 	is_read boolean,
 	date_starred timestamp without time zone,
 	average_rating_score numeric,
-	rating_score core.rating_score
+	rating_score core.rating_score,
+	date_posted timestamp without time zone
 );
 
 
@@ -139,6 +147,7 @@ CREATE TYPE article_api.article_page_result AS (
 	date_starred timestamp without time zone,
 	average_rating_score numeric,
 	rating_score core.rating_score,
+	date_posted timestamp without time zone,
 	total_count bigint
 );
 
@@ -216,6 +225,62 @@ CREATE DOMAIN core.time_zone_name AS text
 CREATE TYPE core.user_account_role AS ENUM (
     'regular',
     'admin'
+);
+
+
+--
+-- Name: article_post_page_result; Type: TYPE; Schema: social; Owner: -
+--
+
+CREATE TYPE social.article_post_page_result AS (
+	id bigint,
+	title text,
+	slug text,
+	source text,
+	date_published timestamp without time zone,
+	section text,
+	description text,
+	aotd_timestamp timestamp without time zone,
+	url text,
+	authors text[],
+	tags text[],
+	word_count bigint,
+	comment_count bigint,
+	read_count bigint,
+	date_created timestamp without time zone,
+	percent_complete double precision,
+	is_read boolean,
+	date_starred timestamp without time zone,
+	average_rating_score numeric,
+	rating_score core.rating_score,
+	date_posted timestamp without time zone,
+	post_date_created timestamp without time zone,
+	user_name text,
+	comment_id bigint,
+	comment_text text,
+	total_count bigint
+);
+
+
+--
+-- Name: following; Type: TYPE; Schema: social; Owner: -
+--
+
+CREATE TYPE social.following AS (
+	user_name text,
+	is_followed boolean
+);
+
+
+--
+-- Name: profile; Type: TYPE; Schema: social; Owner: -
+--
+
+CREATE TYPE social.profile AS (
+	user_name text,
+	is_followed boolean,
+	followee_count bigint,
+	follower_count bigint
 );
 
 
@@ -507,7 +572,8 @@ CREATE TABLE core.article (
     comment_count integer DEFAULT 0 NOT NULL,
     read_count integer DEFAULT 0 NOT NULL,
     average_rating_score numeric,
-    word_count integer DEFAULT 0 NOT NULL
+    word_count integer DEFAULT 0 NOT NULL,
+    silent_post_count integer DEFAULT 0 NOT NULL
 );
 
 
@@ -849,7 +915,8 @@ CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC articl
 		) AS is_read,
 		star.date_starred,
 		article.average_rating_score,
-		user_article_rating.score AS rating_score
+		user_article_rating.score AS rating_score,
+	    earliest_post.date_created AS date_posted
 	FROM
 		article
 		JOIN article_api.article_pages ON (
@@ -867,8 +934,7 @@ CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC articl
 		)
 		LEFT JOIN user_article ON (
 			user_article.user_account_id = get_articles.user_account_id AND
-			user_article.article_id = article.id AND
-			user_article.article_id = ANY (article_ids)
+			user_article.article_id = article.id
 		)
 		LEFT JOIN star ON (
 			star.user_account_id = get_articles.user_account_id AND
@@ -879,7 +945,20 @@ CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC articl
 			user_article_rating.article_id = article.id AND
 			user_article_rating.article_id = ANY (article_ids)
 		)
-	ORDER BY array_position(article_ids, article.id)
+		LEFT JOIN (
+			SELECT
+				article_id,
+				min(date_created) AS date_created
+		    FROM
+		    	social.post
+		    WHERE
+		    	article_id = ANY (get_articles.article_ids) AND
+		        user_account_id = get_articles.user_account_id
+		    GROUP BY
+		    	article_id
+		) AS earliest_post ON earliest_post.article_id = article.id
+	ORDER BY
+	    array_position(article_ids, article.id)
 $$;
 
 
@@ -1555,11 +1634,11 @@ CREATE FUNCTION community_reads.get_highest_rated(user_account_id bigint, page_n
     AS $$
     WITH highest_rated AS (
 		SELECT
-			listed_community_read.id,
+			community_read.id,
 			avg(user_article_rating.score) AS average_rating_score
 		FROM
-			community_reads.listed_community_read
-			JOIN article_api.user_article_rating ON user_article_rating.article_id = listed_community_read.id
+			community_reads.community_read
+			JOIN article_api.user_article_rating ON user_article_rating.article_id = community_read.id
 		WHERE
 			since_date IS NOT NULL AND
 			user_article_rating.timestamp >= since_date AND
@@ -1569,12 +1648,12 @@ CREATE FUNCTION community_reads.get_highest_rated(user_account_id bigint, page_n
 				max_length
 			)
 		GROUP BY
-			listed_community_read.id
+			community_read.id
 		UNION ALL
 		SELECT
 			id,
 			average_rating_score
-		FROM community_reads.listed_community_read
+		FROM community_reads.community_read
 		WHERE
 			since_date IS NULL AND
 			average_rating_score IS NOT NULL AND
@@ -1614,8 +1693,9 @@ CREATE FUNCTION community_reads.get_hot(user_account_id bigint, page_number inte
         SELECT
             id,
             hot_score
-        FROM community_reads.listed_community_read
+        FROM community_reads.community_read
         WHERE (
+        	aotd_timestamp IS DISTINCT FROM (SELECT max(aotd_timestamp) FROM core.article) AND
 			hot_score > 0 AND
 			core.matches_article_length(
 				word_count,
@@ -1652,11 +1732,11 @@ CREATE FUNCTION community_reads.get_most_commented(user_account_id bigint, page_
     AS $$
     WITH most_commented AS (
 		SELECT
-			listed_community_read.id,
+			community_read.id,
 			count(*) AS comment_count
 		FROM
-			community_reads.listed_community_read
-			JOIN comment ON comment.article_id = listed_community_read.id
+			community_reads.community_read
+			JOIN comment ON comment.article_id = community_read.id
 		WHERE
 			since_date IS NOT NULL AND
 			comment.date_created >= since_date AND
@@ -1666,12 +1746,12 @@ CREATE FUNCTION community_reads.get_most_commented(user_account_id bigint, page_
 				max_length
 			)
 		GROUP BY
-			listed_community_read.id
+			community_read.id
 		UNION ALL
 		SELECT
 			id,
 			comment_count
-		FROM community_reads.listed_community_read
+		FROM community_reads.community_read
 		WHERE
 			since_date IS NULL AND
 			comment_count > 0 AND
@@ -1709,26 +1789,26 @@ CREATE FUNCTION community_reads.get_most_read(user_account_id bigint, page_numbe
     AS $$
     WITH most_read AS (
 		SELECT
-			listed_community_read.id,
+			community_read.id,
 			count(*) AS read_count
 		FROM
-			community_reads.listed_community_read
-			JOIN user_article ON user_article.article_id = listed_community_read.id
+			community_reads.community_read
+			JOIN user_article ON user_article.article_id = community_read.id
 		WHERE
 			since_date IS NOT NULL AND
 			user_article.date_completed >= since_date AND
 		    core.matches_article_length(
-				listed_community_read.word_count,
+				community_read.word_count,
 				min_length,
 				max_length
 			)
 		GROUP BY
-			listed_community_read.id
+			community_read.id
 		UNION ALL
 		SELECT
 			id,
 			read_count
-		FROM community_reads.listed_community_read
+		FROM community_reads.community_read
 		WHERE
 			since_date IS NULL AND
 			read_count > 0 AND
@@ -1768,7 +1848,7 @@ CREATE FUNCTION community_reads.get_top(user_account_id bigint, page_number inte
         SELECT
             id,
             top_score
-        FROM community_reads.listed_community_read
+        FROM community_reads.community_read
         WHERE (
 			top_score > 0 AND
 			core.matches_article_length(
@@ -1940,6 +2020,298 @@ CREATE FUNCTION core.utc_to_local_timestamp(utc_timestamp timestamp with time zo
     LANGUAGE sql IMMUTABLE
     AS $$
 	SELECT make_timestamptz_at_time_zone(utc_timestamp, 'UTC') AT TIME ZONE time_zone_name;
+$$;
+
+
+--
+-- Name: create_following(bigint, text, text); Type: FUNCTION; Schema: social; Owner: -
+--
+
+CREATE FUNCTION social.create_following(follower_user_id bigint, followee_user_name text, analytics text) RETURNS void
+    LANGUAGE sql
+    AS $$
+	INSERT INTO core.following
+	    (
+	    	follower_user_account_id,
+	     	followee_user_account_id,
+	     	follow_analytics
+	    )
+	VALUES
+    	(
+    		create_following.follower_user_id,
+    	 	user_account_api.get_user_account_id_by_name(create_following.followee_user_name),
+    	 	create_following.analytics::jsonb
+		);
+$$;
+
+
+--
+-- Name: silent_post; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.silent_post (
+    id bigint NOT NULL,
+    article_id bigint NOT NULL,
+    user_account_id bigint NOT NULL,
+    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    analytics jsonb NOT NULL
+);
+
+
+--
+-- Name: create_silent_post(bigint, bigint, text); Type: FUNCTION; Schema: social; Owner: -
+--
+
+CREATE FUNCTION social.create_silent_post(user_account_id bigint, article_id bigint, analytics text) RETURNS SETOF core.silent_post
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- update the cached article silent_post count
+	UPDATE
+	    article
+	SET
+	    silent_post_count = silent_post_count + 1
+	WHERE
+		id = create_silent_post.article_id;
+    -- insert the new silent post
+    RETURN QUERY
+	INSERT INTO core.silent_post
+    	(
+    		article_id,
+    	 	user_account_id,
+    	 	analytics
+    	)
+    VALUES
+    	(
+    	 	create_silent_post.article_id,
+    	 	create_silent_post.user_account_id,
+    	 	create_silent_post.analytics::jsonb
+		)
+	RETURNING *;
+END;
+$$;
+
+
+--
+-- Name: get_followees(bigint); Type: FUNCTION; Schema: social; Owner: -
+--
+
+CREATE FUNCTION social.get_followees(user_account_id bigint) RETURNS SETOF text
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT
+    	followee.name
+    FROM
+    	social.active_following
+    	LEFT JOIN user_account AS followee ON followee.id = active_following.followee_user_account_id
+    WHERE
+    	active_following.follower_user_account_id = get_followees.user_account_id;
+$$;
+
+
+--
+-- Name: get_followers(bigint, text); Type: FUNCTION; Schema: social; Owner: -
+--
+
+CREATE FUNCTION social.get_followers(viewer_user_id bigint, subject_user_name text) RETURNS SETOF social.following
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT
+		follower.name AS user_name,
+	   	viewer_following.id IS NOT NULL AS is_followed
+	FROM
+		social.active_following AS subject_following
+		JOIN core.user_account AS follower ON follower.id = subject_following.follower_user_account_id
+		LEFT JOIN social.active_following AS viewer_following ON (
+			viewer_following.follower_user_account_id = get_followers.viewer_user_id AND
+			viewer_following.followee_user_account_id = follower.id
+		)
+    WHERE
+        subject_following.followee_user_account_id = user_account_api.get_user_account_id_by_name(get_followers.subject_user_name);
+$$;
+
+
+--
+-- Name: get_posts_from_followees(bigint, integer, integer, integer, integer); Type: FUNCTION; Schema: social; Owner: -
+--
+
+CREATE FUNCTION social.get_posts_from_followees(user_id bigint, page_number integer, page_size integer, min_length integer, max_length integer) RETURNS SETOF social.article_post_page_result
+    LANGUAGE sql STABLE
+    AS $$
+	WITH selected_post AS (
+	    SELECT
+	    	post.*
+	    FROM
+	    	social.post
+	    	JOIN core.article ON article.id = post.article_id
+	    	JOIN social.active_following ON active_following.followee_user_account_id = post.user_account_id
+	    WHERE
+	    	active_following.follower_user_account_id = get_posts_from_followees.user_id AND
+	        core.matches_article_length(
+				article.word_count,
+				get_posts_from_followees.min_length,
+				get_posts_from_followees.max_length
+			)
+	),
+	paginated_post AS (
+	    SELECT
+	    	*
+	    FROM
+	    	selected_post
+	    ORDER BY
+			date_created DESC
+		OFFSET
+			(get_posts_from_followees.page_number - 1) * get_posts_from_followees.page_size
+		LIMIT
+			get_posts_from_followees.page_size
+	)
+    SELECT
+		article.*,
+		paginated_post.date_created AS post_date_created,
+		user_account.name AS user_name,
+		paginated_post.comment_id,
+		paginated_post.comment_text,
+		(
+		    SELECT
+		    	count(*)
+		    FROM
+		        selected_post
+		) AS total_count
+	FROM
+		article_api.get_articles(
+			get_posts_from_followees.user_id,
+			VARIADIC ARRAY(
+				SELECT
+				    DISTINCT article_id
+				FROM
+				    paginated_post
+			)
+		) AS article
+		JOIN paginated_post ON paginated_post.article_id = article.id
+		JOIN user_account ON user_account.id = paginated_post.user_account_id
+    ORDER BY
+    	paginated_post.date_created DESC
+$$;
+
+
+--
+-- Name: get_posts_from_user(bigint, text, integer, integer); Type: FUNCTION; Schema: social; Owner: -
+--
+
+CREATE FUNCTION social.get_posts_from_user(viewer_user_id bigint, subject_user_name text, page_size integer, page_number integer) RETURNS SETOF social.article_post_page_result
+    LANGUAGE sql STABLE
+    AS $$
+    WITH subject_user_account AS (
+        SELECT
+        	id
+        FROM
+        	user_account_api.get_user_account_id_by_name(get_posts_from_user.subject_user_name) AS user_account (id)
+	),
+	selected_post AS (
+	    SELECT
+	    	*
+	    FROM
+	    	social.post
+	    WHERE
+	    	user_account_id = (SELECT id FROM subject_user_account)
+	    ORDER BY
+			date_created DESC
+		OFFSET
+			(get_posts_from_user.page_number - 1) * get_posts_from_user.page_size
+		LIMIT
+			get_posts_from_user.page_size
+	)
+    SELECT
+		article.*,
+		selected_post.date_created AS post_date_created,
+		(
+		    SELECT
+		    	name
+		    FROM
+		        user_account
+		    WHERE
+		    	id = (SELECT id FROM subject_user_account)
+		) AS user_name,
+		selected_post.comment_id AS comment_id,
+		selected_post.comment_text AS comment_text,
+		(
+		    SELECT
+		    	count(*)
+		    FROM
+		        social.post
+		    WHERE
+		    	user_account_id = (SELECT id FROM subject_user_account)
+		) AS total_count
+	FROM
+		article_api.get_articles(
+			get_posts_from_user.viewer_user_id,
+			VARIADIC ARRAY(
+				SELECT
+				    DISTINCT article_id
+				FROM
+				    selected_post
+			)
+		) AS article
+		JOIN selected_post ON selected_post.article_id = article.id
+    ORDER BY
+    	selected_post.date_created DESC
+$$;
+
+
+--
+-- Name: get_profile(bigint, text); Type: FUNCTION; Schema: social; Owner: -
+--
+
+CREATE FUNCTION social.get_profile(viewer_user_id bigint, subject_user_name text) RETURNS SETOF social.profile
+    LANGUAGE sql STABLE
+    AS $$
+    WITH subject_user_account AS (
+        SELECT
+        	id
+        FROM
+        	user_account_api.get_user_account_id_by_name(get_profile.subject_user_name) AS user_account (id)
+	)
+    SELECT
+    	subject.name AS user_name,
+        bool_or(active_following.follower_user_account_id = get_profile.viewer_user_id) AS is_followed,
+		CASE WHEN get_profile.viewer_user_id = (SELECT id FROM subject_user_account)
+		    THEN (
+		    	SELECT
+		    		count(*)
+		    	FROM
+		    		social.active_following
+		        WHERE
+		        	follower_user_account_id = get_profile.viewer_user_id
+			)
+		    ELSE 0
+		END AS followee_count,
+        count(active_following.id) AS follower_count
+    FROM
+    	core.user_account AS subject
+    	LEFT JOIN social.active_following ON active_following.followee_user_account_id = subject.id
+    WHERE
+    	subject.id = user_account_api.get_user_account_id_by_name(get_profile.subject_user_name)
+    GROUP BY
+    	subject.id;
+$$;
+
+
+--
+-- Name: unfollow(bigint, text, text); Type: FUNCTION; Schema: social; Owner: -
+--
+
+CREATE FUNCTION social.unfollow(follower_user_id bigint, followee_user_name text, analytics text) RETURNS void
+    LANGUAGE sql
+    AS $$
+	UPDATE
+		core.following
+    SET
+    	date_unfollowed = core.utc_now(),
+        unfollow_analytics = unfollow.analytics::jsonb
+    WHERE
+        follower_user_account_id = unfollow.follower_user_id AND
+        followee_user_account_id = user_account_api.get_user_account_id_by_name(unfollow.followee_user_name) AND
+    	date_unfollowed IS NULL
 $$;
 
 
@@ -2754,19 +3126,6 @@ $$;
 
 
 --
--- Name: find_user_account(text); Type: FUNCTION; Schema: user_account_api; Owner: -
---
-
-CREATE FUNCTION user_account_api.find_user_account(email text) RETURNS SETOF user_account_api.user_account
-    LANGUAGE sql STABLE
-    AS $$
-	SELECT *
-	FROM user_account_api.user_account
-	WHERE lower(email) = lower(find_user_account.email);
-$$;
-
-
---
 -- Name: get_email_confirmation(bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
@@ -2835,15 +3194,57 @@ $$;
 
 
 --
--- Name: get_user_account(bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
+-- Name: get_user_account_by_email(text); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
-CREATE FUNCTION user_account_api.get_user_account(user_account_id bigint) RETURNS SETOF user_account_api.user_account
+CREATE FUNCTION user_account_api.get_user_account_by_email(email text) RETURNS SETOF user_account_api.user_account
     LANGUAGE sql STABLE
     AS $$
 	SELECT *
 	FROM user_account_api.user_account
-	WHERE id = user_account_id;
+	WHERE lower(email) = lower(get_user_account_by_email.email);
+$$;
+
+
+--
+-- Name: get_user_account_by_id(bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.get_user_account_by_id(user_account_id bigint) RETURNS SETOF user_account_api.user_account
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT *
+	FROM user_account_api.user_account
+	WHERE id = get_user_account_by_id.user_account_id;
+$$;
+
+
+--
+-- Name: get_user_account_by_name(text); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.get_user_account_by_name(user_name text) RETURNS SETOF user_account_api.user_account
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT *
+	FROM user_account_api.user_account
+	WHERE lower(name) = lower(get_user_account_by_name.user_name);
+$$;
+
+
+--
+-- Name: get_user_account_id_by_name(text); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.get_user_account_id_by_name(user_name text) RETURNS bigint
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT
+		id
+	FROM
+		core.user_account
+	WHERE
+		lower(name) = lower(get_user_account_id_by_name.user_name);
 $$;
 
 
@@ -3075,24 +3476,7 @@ CREATE VIEW community_reads.community_read AS
     article.read_count,
     article.average_rating_score
    FROM core.article
-  WHERE ((article.comment_count > 0) OR (article.read_count > 1) OR (article.average_rating_score IS NOT NULL));
-
-
---
--- Name: listed_community_read; Type: VIEW; Schema: community_reads; Owner: -
---
-
-CREATE VIEW community_reads.listed_community_read AS
- SELECT community_read.id,
-    community_read.word_count,
-    community_read.hot_score,
-    community_read.top_score,
-    community_read.comment_count,
-    community_read.read_count,
-    community_read.average_rating_score
-   FROM community_reads.community_read
-  WHERE (community_read.aotd_timestamp IS DISTINCT FROM ( SELECT max(article.aotd_timestamp) AS max
-           FROM core.article));
+  WHERE ((article.comment_count > 0) OR (article.read_count > 1) OR (article.average_rating_score IS NOT NULL) OR (article.silent_post_count > 0));
 
 
 --
@@ -3510,6 +3894,41 @@ ALTER SEQUENCE core.extension_removal_id_seq OWNED BY core.extension_removal.id;
 
 
 --
+-- Name: following; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.following (
+    id bigint NOT NULL,
+    follower_user_account_id bigint NOT NULL,
+    followee_user_account_id bigint NOT NULL,
+    date_followed timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    date_unfollowed timestamp without time zone,
+    follow_analytics jsonb NOT NULL,
+    unfollow_analytics jsonb,
+    CONSTRAINT following_check CHECK ((follower_user_account_id <> followee_user_account_id))
+);
+
+
+--
+-- Name: following_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.following_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: following_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.following_id_seq OWNED BY core.following.id;
+
+
+--
 -- Name: page_id_seq; Type: SEQUENCE; Schema: core; Owner: -
 --
 
@@ -3564,6 +3983,25 @@ CREATE SEQUENCE core.rating_id_seq
 --
 
 ALTER SEQUENCE core.rating_id_seq OWNED BY core.rating.id;
+
+
+--
+-- Name: silent_post_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.silent_post_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: silent_post_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.silent_post_id_seq OWNED BY core.silent_post.id;
 
 
 --
@@ -3706,6 +4144,40 @@ ALTER SEQUENCE core.user_page_id_seq OWNED BY core.user_article.id;
 
 
 --
+-- Name: active_following; Type: VIEW; Schema: social; Owner: -
+--
+
+CREATE VIEW social.active_following AS
+ SELECT following.id,
+    following.follower_user_account_id,
+    following.followee_user_account_id,
+    following.date_followed
+   FROM core.following
+  WHERE (following.date_unfollowed IS NULL);
+
+
+--
+-- Name: post; Type: VIEW; Schema: social; Owner: -
+--
+
+CREATE VIEW social.post AS
+ SELECT comment.article_id,
+    comment.user_account_id,
+    comment.date_created,
+    comment.id AS comment_id,
+    comment.text AS comment_text
+   FROM core.comment
+  WHERE (comment.parent_comment_id IS NULL)
+UNION ALL
+ SELECT silent_post.article_id,
+    silent_post.user_account_id,
+    silent_post.date_created,
+    NULL::bigint AS comment_id,
+    NULL::text AS comment_text
+   FROM core.silent_post;
+
+
+--
 -- Name: current_streak; Type: MATERIALIZED VIEW; Schema: stats; Owner: -
 --
 
@@ -3731,11 +4203,11 @@ CREATE MATERIALIZED VIEW stats.current_streak AS
 CREATE VIEW stats.scouting AS
  SELECT article.id AS article_id,
     article.aotd_timestamp,
-    rating.user_account_id
+    post.user_account_id
    FROM ((core.article
-     JOIN core.rating ON ((rating.article_id = article.id)))
-     LEFT JOIN core.rating earlier_rating ON (((earlier_rating.article_id = rating.article_id) AND (earlier_rating."timestamp" < rating."timestamp"))))
-  WHERE ((article.aotd_timestamp IS NOT NULL) AND (earlier_rating.id IS NULL));
+     JOIN social.post ON ((post.article_id = article.id)))
+     LEFT JOIN social.post earlier_post ON (((earlier_post.article_id = post.article_id) AND (earlier_post.date_created < post.date_created))))
+  WHERE ((article.aotd_timestamp IS NOT NULL) AND (earlier_post.date_created IS NULL));
 
 
 --
@@ -3850,6 +4322,13 @@ ALTER TABLE ONLY core.extension_removal ALTER COLUMN id SET DEFAULT nextval('cor
 
 
 --
+-- Name: following id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.following ALTER COLUMN id SET DEFAULT nextval('core.following_id_seq'::regclass);
+
+
+--
 -- Name: page id; Type: DEFAULT; Schema: core; Owner: -
 --
 
@@ -3868,6 +4347,13 @@ ALTER TABLE ONLY core.password_reset_request ALTER COLUMN id SET DEFAULT nextval
 --
 
 ALTER TABLE ONLY core.rating ALTER COLUMN id SET DEFAULT nextval('core.rating_id_seq'::regclass);
+
+
+--
+-- Name: silent_post id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.silent_post ALTER COLUMN id SET DEFAULT nextval('core.silent_post_id_seq'::regclass);
 
 
 --
@@ -4073,6 +4559,14 @@ ALTER TABLE ONLY core.extension_removal
 
 
 --
+-- Name: following following_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.following
+    ADD CONSTRAINT following_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: page page_pkey; Type: CONSTRAINT; Schema: core; Owner: -
 --
 
@@ -4094,6 +4588,22 @@ ALTER TABLE ONLY core.password_reset_request
 
 ALTER TABLE ONLY core.rating
     ADD CONSTRAINT rating_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: silent_post silent_post_article_id_user_account_id_key; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.silent_post
+    ADD CONSTRAINT silent_post_article_id_user_account_id_key UNIQUE (article_id, user_account_id);
+
+
+--
+-- Name: silent_post silent_post_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.silent_post
+    ADD CONSTRAINT silent_post_pkey PRIMARY KEY (id);
 
 
 --
@@ -4236,6 +4746,13 @@ CREATE INDEX article_read_count_idx ON core.article USING btree (read_count DESC
 
 
 --
+-- Name: article_silent_post_count_idx; Type: INDEX; Schema: core; Owner: -
+--
+
+CREATE INDEX article_silent_post_count_idx ON core.article USING btree (silent_post_count);
+
+
+--
 -- Name: article_top_score_idx; Type: INDEX; Schema: core; Owner: -
 --
 
@@ -4254,6 +4771,13 @@ CREATE INDEX article_word_count_idx ON core.article USING btree (word_count);
 --
 
 CREATE INDEX comment_article_id_idx ON core.comment USING btree (article_id);
+
+
+--
+-- Name: following_follower_user_account_id_followee_user_account_id_idx; Type: INDEX; Schema: core; Owner: -
+--
+
+CREATE UNIQUE INDEX following_follower_user_account_id_followee_user_account_id_idx ON core.following USING btree (follower_user_account_id, followee_user_account_id) WHERE (date_unfollowed IS NULL);
 
 
 --
@@ -4498,6 +5022,22 @@ ALTER TABLE ONLY core.extension_removal
 
 
 --
+-- Name: following following_followee_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.following
+    ADD CONSTRAINT following_followee_user_account_id_fkey FOREIGN KEY (followee_user_account_id) REFERENCES core.user_account(id);
+
+
+--
+-- Name: following following_follower_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.following
+    ADD CONSTRAINT following_follower_user_account_id_fkey FOREIGN KEY (follower_user_account_id) REFERENCES core.user_account(id);
+
+
+--
 -- Name: page page_article_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
 --
 
@@ -4527,6 +5067,22 @@ ALTER TABLE ONLY core.rating
 
 ALTER TABLE ONLY core.rating
     ADD CONSTRAINT rating_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
+
+
+--
+-- Name: silent_post silent_post_article_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.silent_post
+    ADD CONSTRAINT silent_post_article_id_fkey FOREIGN KEY (article_id) REFERENCES core.article(id);
+
+
+--
+-- Name: silent_post silent_post_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.silent_post
+    ADD CONSTRAINT silent_post_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
 
 
 --

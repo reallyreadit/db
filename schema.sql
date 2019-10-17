@@ -449,6 +449,25 @@ $$;
 
 
 --
+-- Name: log_client_error_report(text, text); Type: FUNCTION; Schema: analytics; Owner: -
+--
+
+CREATE FUNCTION analytics.log_client_error_report(content text, analytics text) RETURNS void
+    LANGUAGE sql
+    AS $$
+    INSERT INTO
+    	core.client_error_report (
+    		content,
+    	    analytics
+    	)
+    VALUES (
+        log_client_error_report.content,
+        log_client_error_report.analytics::jsonb
+	);
+$$;
+
+
+--
 -- Name: log_extension_installation(uuid, bigint, text); Type: FUNCTION; Schema: analytics; Owner: -
 --
 
@@ -3696,6 +3715,37 @@ ALTER SEQUENCE core.challenge_response_id_seq OWNED BY core.challenge_response.i
 
 
 --
+-- Name: client_error_report; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.client_error_report (
+    id bigint NOT NULL,
+    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    content text,
+    analytics jsonb
+);
+
+
+--
+-- Name: client_error_report_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.client_error_report_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: client_error_report_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.client_error_report_id_seq OWNED BY core.client_error_report.id;
+
+
+--
 -- Name: comment_id_seq; Type: SEQUENCE; Schema: core; Owner: -
 --
 
@@ -4273,6 +4323,13 @@ ALTER TABLE ONLY core.challenge_response ALTER COLUMN id SET DEFAULT nextval('co
 
 
 --
+-- Name: client_error_report id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.client_error_report ALTER COLUMN id SET DEFAULT nextval('core.client_error_report_id_seq'::regclass);
+
+
+--
 -- Name: comment id; Type: DEFAULT; Schema: core; Owner: -
 --
 
@@ -4484,6 +4541,14 @@ ALTER TABLE ONLY core.challenge
 
 ALTER TABLE ONLY core.challenge_response
     ADD CONSTRAINT challenge_response_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: client_error_report client_error_report_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.client_error_report
+    ADD CONSTRAINT client_error_report_pkey PRIMARY KEY (id);
 
 
 --

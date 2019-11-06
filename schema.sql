@@ -30,13 +30,6 @@ CREATE SCHEMA article_api;
 
 
 --
--- Name: bulk_mailing_api; Type: SCHEMA; Schema: -; Owner: -
---
-
-CREATE SCHEMA bulk_mailing_api;
-
-
---
 -- Name: community_reads; Type: SCHEMA; Schema: -; Owner: -
 --
 
@@ -48,6 +41,13 @@ CREATE SCHEMA community_reads;
 --
 
 CREATE SCHEMA core;
+
+
+--
+-- Name: notifications; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA notifications;
 
 
 --
@@ -183,6 +183,79 @@ CREATE TYPE core.challenge_response_action AS ENUM (
 
 
 --
+-- Name: notification_action; Type: TYPE; Schema: core; Owner: -
+--
+
+CREATE TYPE core.notification_action AS ENUM (
+    'open',
+    'view',
+    'reply'
+);
+
+
+--
+-- Name: notification_channel; Type: TYPE; Schema: core; Owner: -
+--
+
+CREATE TYPE core.notification_channel AS ENUM (
+    'email',
+    'extension',
+    'push'
+);
+
+
+--
+-- Name: notification_event_frequency; Type: TYPE; Schema: core; Owner: -
+--
+
+CREATE TYPE core.notification_event_frequency AS ENUM (
+    'never',
+    'daily',
+    'weekly'
+);
+
+
+--
+-- Name: notification_event_type; Type: TYPE; Schema: core; Owner: -
+--
+
+CREATE TYPE core.notification_event_type AS ENUM (
+    'welcome',
+    'email_confirmation',
+    'email_confirmation_reminder',
+    'password_reset',
+    'company_update',
+    'suggested_reading',
+    'aotd',
+    'aotd_digest',
+    'reply',
+    'reply_daily_digest',
+    'reply_weekly_digest',
+    'loopback',
+    'loopback_daily_digest',
+    'loopback_weekly_digest',
+    'post',
+    'post_daily_digest',
+    'post_weekly_digest',
+    'follower',
+    'follower_daily_digest',
+    'follower_weekly_digest'
+);
+
+
+--
+-- Name: notification_push_unregistration_reason; Type: TYPE; Schema: core; Owner: -
+--
+
+CREATE TYPE core.notification_push_unregistration_reason AS ENUM (
+    'sign_out',
+    'user_change',
+    'token_change',
+    'service_unregistered'
+);
+
+
+--
 -- Name: source_rule_action; Type: TYPE; Schema: core; Owner: -
 --
 
@@ -229,6 +302,111 @@ CREATE TYPE core.user_account_role AS ENUM (
 
 
 --
+-- Name: alert_dispatch; Type: TYPE; Schema: notifications; Owner: -
+--
+
+CREATE TYPE notifications.alert_dispatch AS (
+	receipt_id bigint,
+	via_email boolean,
+	via_push boolean,
+	user_account_id bigint,
+	user_name text,
+	email_address text,
+	push_device_tokens text[],
+	aotd_alert boolean,
+	reply_alert_count integer,
+	loopback_alert_count integer,
+	post_alert_count integer,
+	follower_alert_count integer
+);
+
+
+--
+-- Name: comment_digest_dispatch; Type: TYPE; Schema: notifications; Owner: -
+--
+
+CREATE TYPE notifications.comment_digest_dispatch AS (
+	receipt_id bigint,
+	user_account_id bigint,
+	user_name text,
+	email_address text,
+	comment_id bigint,
+	comment_date_created timestamp without time zone,
+	comment_text text,
+	comment_author text,
+	comment_article_id bigint,
+	comment_article_title text
+);
+
+
+--
+-- Name: email_dispatch; Type: TYPE; Schema: notifications; Owner: -
+--
+
+CREATE TYPE notifications.email_dispatch AS (
+	receipt_id bigint,
+	user_account_id bigint,
+	user_name text,
+	email_address text
+);
+
+
+--
+-- Name: follower_digest_dispatch; Type: TYPE; Schema: notifications; Owner: -
+--
+
+CREATE TYPE notifications.follower_digest_dispatch AS (
+	receipt_id bigint,
+	user_account_id bigint,
+	user_name text,
+	email_address text,
+	follower_following_id bigint,
+	follower_date_followed timestamp without time zone,
+	follower_user_name text
+);
+
+
+--
+-- Name: post_alert_dispatch; Type: TYPE; Schema: notifications; Owner: -
+--
+
+CREATE TYPE notifications.post_alert_dispatch AS (
+	receipt_id bigint,
+	via_email boolean,
+	via_push boolean,
+	is_replyable boolean,
+	user_account_id bigint,
+	user_name text,
+	email_address text,
+	push_device_tokens text[],
+	aotd_alert boolean,
+	reply_alert_count integer,
+	loopback_alert_count integer,
+	post_alert_count integer,
+	follower_alert_count integer
+);
+
+
+--
+-- Name: post_digest_dispatch; Type: TYPE; Schema: notifications; Owner: -
+--
+
+CREATE TYPE notifications.post_digest_dispatch AS (
+	receipt_id bigint,
+	user_account_id bigint,
+	user_name text,
+	email_address text,
+	post_comment_id bigint,
+	post_silent_post_id bigint,
+	post_date_created timestamp without time zone,
+	post_comment_text text,
+	post_author text,
+	post_article_id bigint,
+	post_article_title text
+);
+
+
+--
 -- Name: article_post_page_result; Type: TYPE; Schema: social; Owner: -
 --
 
@@ -258,17 +436,20 @@ CREATE TYPE social.article_post_page_result AS (
 	user_name text,
 	comment_id bigint,
 	comment_text text,
+	silent_post_id bigint,
+	has_alert boolean,
 	total_count bigint
 );
 
 
 --
--- Name: following; Type: TYPE; Schema: social; Owner: -
+-- Name: follower; Type: TYPE; Schema: social; Owner: -
 --
 
-CREATE TYPE social.following AS (
+CREATE TYPE social.follower AS (
 	user_name text,
-	is_followed boolean
+	is_followed boolean,
+	has_alert boolean
 );
 
 
@@ -622,16 +803,16 @@ CREATE TABLE core.user_account (
     email character varying(256) NOT NULL,
     password_hash bytea NOT NULL,
     password_salt bytea NOT NULL,
-    receive_reply_email_notifications boolean DEFAULT true NOT NULL,
-    receive_reply_desktop_notifications boolean DEFAULT true NOT NULL,
-    last_new_reply_ack timestamp without time zone DEFAULT core.utc_now() NOT NULL,
-    last_new_reply_desktop_notification timestamp without time zone DEFAULT core.utc_now() NOT NULL,
     date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
     role core.user_account_role DEFAULT 'regular'::core.user_account_role NOT NULL,
-    receive_website_updates boolean DEFAULT true,
-    receive_suggested_readings boolean DEFAULT true,
     time_zone_id bigint,
     creation_analytics jsonb,
+    is_email_confirmed boolean DEFAULT false NOT NULL,
+    aotd_alert boolean DEFAULT false NOT NULL,
+    reply_alert_count integer DEFAULT 0 NOT NULL,
+    loopback_alert_count integer DEFAULT 0 NOT NULL,
+    post_alert_count integer DEFAULT 0 NOT NULL,
+    follower_alert_count integer DEFAULT 0 NOT NULL,
     CONSTRAINT user_account_email_valid CHECK (((email)::text ~~ '%@%'::text)),
     CONSTRAINT user_account_name_valid CHECK (((name)::text ~ similar_escape('[A-Za-z0-9\-_]+'::text, NULL::text)))
 );
@@ -1472,173 +1653,20 @@ $$;
 
 
 --
--- Name: create_bulk_mailing(text, text, text, bigint, bigint[], boolean[]); Type: FUNCTION; Schema: bulk_mailing_api; Owner: -
+-- Name: get_aotds(bigint, integer); Type: FUNCTION; Schema: community_reads; Owner: -
 --
 
-CREATE FUNCTION bulk_mailing_api.create_bulk_mailing(subject text, body text, list text, user_account_id bigint, recipient_ids bigint[], recipient_results boolean[]) RETURNS bigint
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-	bulk_mailing_id bigint;
-BEGIN
-	INSERT INTO bulk_mailing (subject, body, list, user_account_id)
-		VALUES (subject, body, list, user_account_id)
-		RETURNING id INTO bulk_mailing_id;
-	FOR i IN 1..coalesce(array_length(recipient_ids, 1), 0) LOOP
-		INSERT INTO bulk_mailing_recipient (bulk_mailing_id, user_account_id, is_successful)
-			VALUES (bulk_mailing_id, recipient_ids[i], recipient_results[i]);
-	END LOOP;
-	RETURN bulk_mailing_id;
-END;
-$$;
-
-
---
--- Name: create_email_notification(text, text, text, text); Type: FUNCTION; Schema: bulk_mailing_api; Owner: -
---
-
-CREATE FUNCTION bulk_mailing_api.create_email_notification(notification_type text, mail text, bounce text, complaint text) RETURNS void
-    LANGUAGE sql
-    AS $$
-    INSERT INTO email_notification
-        (notification_type, mail, bounce, complaint)
-    VALUES
-		(notification_type, mail::json, bounce::json, complaint::json);
-$$;
-
-
---
--- Name: get_blocked_email_addresses(); Type: FUNCTION; Schema: bulk_mailing_api; Owner: -
---
-
-CREATE FUNCTION bulk_mailing_api.get_blocked_email_addresses() RETURNS SETOF text
-    LANGUAGE sql STABLE
-    AS $$
-	SELECT DISTINCT lower(recipient->>'email_address')
-	FROM (
-		SELECT jsonb_array_elements(bounce->'bounced_recipients')
-		FROM email_notification
-		UNION ALL
-		SELECT jsonb_array_elements(complaint->'complained_recipients')
-		FROM email_notification
-	) AS row (recipient);
-$$;
-
-
---
--- Name: list_bulk_mailings(); Type: FUNCTION; Schema: bulk_mailing_api; Owner: -
---
-
-CREATE FUNCTION bulk_mailing_api.list_bulk_mailings() RETURNS TABLE(id bigint, date_sent timestamp without time zone, subject text, body text, list text, user_account text, recipient_count bigint, error_count bigint)
-    LANGUAGE sql
-    AS $$
-	SELECT
-		bulk_mailing.id,
-		bulk_mailing.date_sent,
-		bulk_mailing.subject,
-		bulk_mailing.body,
-		bulk_mailing.list,
-		user_account.name AS user_account,
-		count(*) AS recipient_count,
-		count(*) FILTER (WHERE NOT bulk_mailing_recipient.is_successful) AS error_count
-		FROM bulk_mailing
-		JOIN user_account ON bulk_mailing.user_account_id = user_account.id
-		JOIN bulk_mailing_recipient ON bulk_mailing.id = bulk_mailing_recipient.bulk_mailing_id
-		GROUP BY bulk_mailing.id, user_account.id;
-$$;
-
-
---
--- Name: email_confirmation; Type: TABLE; Schema: core; Owner: -
---
-
-CREATE TABLE core.email_confirmation (
-    id bigint NOT NULL,
-    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
-    user_account_id bigint NOT NULL,
-    email_address text NOT NULL,
-    date_confirmed timestamp without time zone
-);
-
-
---
--- Name: time_zone; Type: TABLE; Schema: core; Owner: -
---
-
-CREATE TABLE core.time_zone (
-    id bigint NOT NULL,
-    name core.time_zone_name NOT NULL,
-    display_name character varying(256) NOT NULL,
-    territory character varying(3) NOT NULL,
-    base_utc_offset interval hour to second NOT NULL
-);
-
-
---
--- Name: user_account; Type: VIEW; Schema: user_account_api; Owner: -
---
-
-CREATE VIEW user_account_api.user_account AS
- SELECT user_account.id,
-    user_account.name,
-    user_account.email,
-    user_account.password_hash,
-    user_account.password_salt,
-    user_account.receive_reply_email_notifications,
-    user_account.receive_reply_desktop_notifications,
-    user_account.last_new_reply_ack,
-    user_account.last_new_reply_desktop_notification,
-    user_account.date_created,
-    user_account.role,
-    user_account.receive_website_updates,
-    user_account.receive_suggested_readings,
-    (latest_email_confirmation.date_confirmed IS NOT NULL) AS is_email_confirmed,
-    user_account.time_zone_id,
-    time_zone.name AS time_zone_name,
-    time_zone.display_name AS time_zone_display_name
-   FROM ((core.user_account
-     LEFT JOIN ( SELECT ec_left.user_account_id,
-            ec_left.date_confirmed
-           FROM (core.email_confirmation ec_left
-             LEFT JOIN core.email_confirmation ec_right ON (((ec_right.user_account_id = ec_left.user_account_id) AND (ec_right.date_created > ec_left.date_created))))
-          WHERE (ec_right.id IS NULL)) latest_email_confirmation ON ((latest_email_confirmation.user_account_id = user_account.id)))
-     LEFT JOIN core.time_zone ON ((time_zone.id = user_account.time_zone_id)));
-
-
---
--- Name: list_confirmation_reminder_recipients(); Type: FUNCTION; Schema: bulk_mailing_api; Owner: -
---
-
-CREATE FUNCTION bulk_mailing_api.list_confirmation_reminder_recipients() RETURNS SETOF user_account_api.user_account
-    LANGUAGE sql STABLE
-    AS $$
-	SELECT
-	DISTINCT ON (user_account.id)
-		user_account.*
-	FROM
-		bulk_mailing
-		JOIN bulk_mailing_recipient recipient ON recipient.bulk_mailing_id = bulk_mailing.id
-		JOIN user_account_api.user_account ON user_account.id = recipient.user_account_id
-	WHERE
-		bulk_mailing.list = 'ConfirmationReminder';
-$$;
-
-
---
--- Name: get_aotd(bigint); Type: FUNCTION; Schema: community_reads; Owner: -
---
-
-CREATE FUNCTION community_reads.get_aotd(user_account_id bigint) RETURNS SETOF article_api.article
+CREATE FUNCTION community_reads.get_aotds(user_account_id bigint, day_count integer) RETURNS SETOF article_api.article
     LANGUAGE sql STABLE
     AS $$
 	SELECT *
 	FROM article_api.get_articles(
 		user_account_id,
-		(
+		VARIADIC ARRAY(
 			SELECT id
 			FROM article
 			ORDER BY aotd_timestamp DESC NULLS LAST
-			LIMIT 1
+			LIMIT get_aotds.day_count
 		)
 	);
 $$;
@@ -1900,20 +1928,43 @@ $$;
 -- Name: set_aotd(); Type: FUNCTION; Schema: community_reads; Owner: -
 --
 
-CREATE FUNCTION community_reads.set_aotd() RETURNS void
+CREATE FUNCTION community_reads.set_aotd() RETURNS SETOF article_api.article
     LANGUAGE sql
     AS $$
-	UPDATE article
-	SET aotd_timestamp = utc_now()
-	WHERE id = (
-		SELECT id
-		FROM community_reads.community_read
+    WITH aotd AS (
+    	UPDATE
+			core.article
+		SET
+			aotd_timestamp = core.utc_now()
 		WHERE
-			aotd_timestamp IS NULL AND
-			core.matches_article_length(word_count, 5, NULL)
-		ORDER BY hot_score DESC
-		LIMIT 1
-	);
+			id = (
+    			SELECT
+					id
+				FROM
+					community_reads.community_read
+				WHERE
+					aotd_timestamp IS NULL AND
+					core.matches_article_length(word_count, 5, NULL)
+				ORDER BY
+					hot_score DESC
+				LIMIT
+					1
+			)
+    	RETURNING
+    		id
+    )
+    SELECT
+    	*
+    FROM
+    	article_api.get_article(
+    		article_id => (
+    			SELECT
+    				id
+    			FROM
+    				aotd
+    		),
+    		user_account_id => NULL
+		);
 $$;
 
 
@@ -1954,6 +2005,35 @@ CREATE FUNCTION core.generate_local_timestamp_to_utc_range_series(start timestam
 		) AS utc_range
 	FROM
     	generate_series(start, stop, step) AS local_timestamp;
+$$;
+
+
+--
+-- Name: time_zone; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.time_zone (
+    id bigint NOT NULL,
+    name core.time_zone_name NOT NULL,
+    display_name character varying(256) NOT NULL,
+    territory character varying(3) NOT NULL,
+    base_utc_offset interval hour to second NOT NULL
+);
+
+
+--
+-- Name: get_time_zone_by_id(bigint); Type: FUNCTION; Schema: core; Owner: -
+--
+
+CREATE FUNCTION core.get_time_zone_by_id(id bigint) RETURNS SETOF core.time_zone
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT
+		*
+    FROM
+    	core.time_zone
+    WHERE
+    	id = get_time_zone_by_id.id;
 $$;
 
 
@@ -2043,10 +2123,2013 @@ $$;
 
 
 --
+-- Name: notification_receipt; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.notification_receipt (
+    id bigint NOT NULL,
+    event_id bigint NOT NULL,
+    user_account_id bigint NOT NULL,
+    date_alert_cleared timestamp without time zone,
+    via_email boolean DEFAULT false NOT NULL,
+    via_extension boolean DEFAULT false NOT NULL,
+    via_push boolean DEFAULT false NOT NULL
+);
+
+
+--
+-- Name: clear_alert(bigint); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.clear_alert(receipt_id bigint) RETURNS SETOF core.notification_receipt
+    LANGUAGE plpgsql
+    AS $$
+<<locals>>
+DECLARE
+    cleared_receipt core.notification_receipt;
+BEGIN
+    -- clear the alert only if it hasn't be cleared yet
+    UPDATE
+    	core.notification_receipt AS receipt
+    SET
+    	date_alert_cleared = core.utc_now()
+    WHERE
+    	receipt.id = clear_alert.receipt_id AND
+    	receipt.date_alert_cleared IS NULL
+    RETURNING
+        * INTO locals.cleared_receipt;
+    -- if the alert was cleared then decrement the cached counts on user_account
+    IF locals.cleared_receipt IS NOT NULL THEN
+		CASE (
+			SELECT
+				type
+			FROM
+				core.notification_event
+			WHERE
+				id = locals.cleared_receipt.event_id
+		)
+			WHEN 'aotd' THEN
+				UPDATE
+					core.user_account
+				SET
+					aotd_alert = false
+				WHERE
+					id = locals.cleared_receipt.user_account_id;
+			WHEN 'reply' THEN
+				UPDATE
+					core.user_account
+				SET
+					reply_alert_count = greatest(reply_alert_count - 1, 0)
+				WHERE
+					id = locals.cleared_receipt.user_account_id;
+			WHEN 'loopback' THEN
+				UPDATE
+					core.user_account
+				SET
+					loopback_alert_count = greatest(loopback_alert_count - 1, 0)
+				WHERE
+					id = locals.cleared_receipt.user_account_id;
+			WHEN 'post' THEN
+				UPDATE
+					core.user_account
+				SET
+					post_alert_count = greatest(post_alert_count - 1, 0)
+				WHERE
+					id = locals.cleared_receipt.user_account_id;
+			WHEN 'follower' THEN
+				UPDATE
+					core.user_account
+				SET
+					follower_alert_count = greatest(follower_alert_count - 1, 0)
+				WHERE
+					id = locals.cleared_receipt.user_account_id;
+			ELSE
+				-- suppress CASE_NOT_FOUND exception
+		END CASE;
+	END IF;
+    -- return the cleared receipt
+    RETURN NEXT locals.cleared_receipt;
+END;
+$$;
+
+
+--
+-- Name: clear_all_alerts(text, bigint); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.clear_all_alerts(type text, user_account_id bigint) RETURNS SETOF core.notification_receipt
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- reset cached alert counters
+    CASE clear_all_alerts.type
+        WHEN 'reply' THEN
+        	UPDATE
+        	    core.user_account
+        	SET
+        	    reply_alert_count = 0
+        	WHERE
+        		id = clear_all_alerts.user_account_id;
+        WHEN 'loopback' THEN
+        	UPDATE
+        	    core.user_account
+        	SET
+        	    loopback_alert_count = 0
+        	WHERE
+        		id = clear_all_alerts.user_account_id;
+        WHEN 'post' THEN
+        	UPDATE
+        	    core.user_account
+        	SET
+        	    post_alert_count = 0
+        	WHERE
+        		id = clear_all_alerts.user_account_id;
+        WHEN 'follower' THEN
+        	UPDATE
+        	    core.user_account
+        	SET
+        	    follower_alert_count = 0
+        	WHERE
+        		id = clear_all_alerts.user_account_id;
+    END CASE;
+    -- clear all uncleared alerts of the specified type
+    RETURN QUERY
+    UPDATE
+    	core.notification_receipt
+    SET
+    	date_alert_cleared = core.utc_now()
+    FROM
+    	core.notification_event
+    WHERE
+    	notification_receipt.event_id = notification_event.id AND
+        notification_event.type = clear_all_alerts.type::core.notification_event_type AND
+        notification_receipt.user_account_id = clear_all_alerts.user_account_id AND
+    	notification_receipt.date_alert_cleared IS NULL
+    RETURNING
+        notification_receipt.*;
+END;
+$$;
+
+
+--
+-- Name: clear_aotd_alert(bigint); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.clear_aotd_alert(user_account_id bigint) RETURNS SETOF core.notification_receipt
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- set the cached user_account alert flag to false
+	UPDATE
+	    core.user_account
+    SET
+        aotd_alert = false
+    WHERE
+    	id = clear_aotd_alert.user_account_id;
+    -- clear the latest aotd alert only if it hasn't been cleared yet
+	RETURN QUERY
+    UPDATE
+        core.notification_receipt
+    SET
+        date_alert_cleared = core.utc_now()
+    WHERE
+    	id = (
+    	    SELECT
+    	    	CASE WHEN receipt.date_alert_cleared IS NULL
+    	    		THEN receipt.id
+    	    		ELSE NULL
+    	    	END
+    	    FROM
+    	    	core.notification_receipt AS receipt
+    	    	JOIN core.notification_event ON
+    	    		notification_event.id = receipt.event_id
+    	    WHERE
+    	    	notification_event.type = 'aotd' AND
+    	        receipt.user_account_id = clear_aotd_alert.user_account_id
+    	    ORDER BY
+    	    	notification_event.date_created DESC
+    	    LIMIT
+    	    	1
+		)
+    RETURNING *;
+END;
+$$;
+
+
+--
+-- Name: create_aotd_digest_notifications(); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.create_aotd_digest_notifications() RETURNS SETOF notifications.email_dispatch
+    LANGUAGE sql
+    AS $$
+    WITH recipient AS (
+      	SELECT
+        	current_preference.user_account_id
+        FROM
+        	notifications.current_preference
+        WHERE
+        	current_preference.aotd_digest_via_email = 'weekly'
+	),
+    aotd_event AS (
+		INSERT INTO
+			core.notification_event (type)
+		SELECT
+        	'aotd_digest'
+        FROM
+        	recipient
+		LIMIT 1
+        RETURNING
+        	id
+	),
+    receipt AS (
+        INSERT INTO
+			core.notification_receipt (
+				event_id,
+				user_account_id,
+				via_email,
+				via_extension,
+				via_push
+			)
+		SELECT
+			(SELECT id FROM aotd_event),
+		    recipient.user_account_id,
+		    TRUE,
+		    FALSE,
+		    FALSE
+        FROM
+        	recipient
+        RETURNING
+        	id,
+            user_account_id
+	),
+    aotd_data AS (
+		INSERT INTO
+			core.notification_data (
+				event_id,
+				article_id
+			)
+		SELECT
+			(SELECT id FROM aotd_event),
+			article.id
+		FROM
+			core.article
+		WHERE
+			EXISTS (SELECT id FROM aotd_event)
+        ORDER BY
+        	article.aotd_timestamp DESC NULLS LAST
+        LIMIT 7
+	)
+    SELECT
+        receipt.id,
+        user_account.id,
+        user_account.name,
+        user_account.email
+    FROM
+    	receipt
+        JOIN core.user_account
+    		ON user_account.id = receipt.user_account_id;
+$$;
+
+
+--
+-- Name: create_aotd_notifications(bigint); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.create_aotd_notifications(article_id bigint) RETURNS SETOF notifications.alert_dispatch
+    LANGUAGE plpgsql
+    AS $$
+<<locals>>
+DECLARE
+    event_id bigint;
+BEGIN
+	-- create the event
+	INSERT INTO
+		core.notification_event (
+			type
+		)
+	VALUES
+		(
+			'aotd'
+		)
+	RETURNING
+		id INTO locals.event_id;
+	-- create the data
+	INSERT INTO
+		core.notification_data (
+			event_id,
+			article_id
+		)
+	VALUES
+		(
+			locals.event_id,
+			create_aotd_notifications.article_id
+		);
+	-- set the alert for all users
+	UPDATE
+		core.user_account
+	SET
+		aotd_alert = true
+	WHERE
+		aotd_alert = false;
+	-- create receipts and return the dispatches
+	RETURN QUERY
+	WITH receipt AS (
+		INSERT INTO
+			core.notification_receipt (
+				event_id,
+				user_account_id,
+				via_email,
+				via_extension,
+				via_push
+			)
+		(
+			SELECT
+				locals.event_id,
+				preference.user_account_id,
+				preference.aotd_via_email,
+				preference.aotd_via_extension,
+				preference.aotd_via_push
+			FROM
+				notifications.current_preference AS preference
+		)
+		RETURNING
+	    	id,
+		    user_account_id,
+		    via_email,
+		    via_push
+	)
+	SELECT
+		receipt.id,
+	    receipt.via_email,
+	    receipt.via_push,
+		user_account.id,
+	    user_account.name::text,
+		user_account.email::text,
+	    coalesce(array_agg(device.token) FILTER (WHERE device.token IS NOT NULL), '{}'),
+	    user_account.aotd_alert,
+	    user_account.reply_alert_count,
+	    user_account.loopback_alert_count,
+	    user_account.post_alert_count,
+	    user_account.follower_alert_count
+	FROM
+		receipt
+		JOIN core.user_account
+		    ON user_account.id = receipt.user_account_id
+		LEFT JOIN notifications.registered_push_device AS device
+			ON device.user_account_id = receipt.user_account_id
+	WHERE
+		receipt.via_email OR device.id IS NOT NULL
+	GROUP BY
+		receipt.id,
+	    receipt.via_email,
+	    receipt.via_push,
+	    user_account.id;
+END;
+$$;
+
+
+--
+-- Name: create_company_update_notifications(bigint, text, text); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.create_company_update_notifications(author_id bigint, subject text, body text) RETURNS SETOF notifications.email_dispatch
+    LANGUAGE sql
+    AS $$
+    WITH recipient AS (
+      	SELECT
+        	current_preference.user_account_id
+        FROM
+        	notifications.current_preference
+        WHERE
+        	current_preference.company_update_via_email
+	),
+    update_event AS (
+		INSERT INTO
+			core.notification_event (
+				type,
+			    bulk_email_author_id,
+			    bulk_email_subject,
+			    bulk_email_body
+			)
+		SELECT
+        	'company_update',
+		    create_company_update_notifications.author_id,
+		    create_company_update_notifications.subject,
+		    create_company_update_notifications.body
+        FROM
+        	recipient
+		LIMIT 1
+        RETURNING
+        	id
+	),
+    receipt AS (
+        INSERT INTO
+			core.notification_receipt (
+				event_id,
+				user_account_id,
+				via_email,
+				via_extension,
+				via_push
+			)
+		SELECT
+			(SELECT id FROM update_event),
+		    recipient.user_account_id,
+		    TRUE,
+		    FALSE,
+		    FALSE
+        FROM
+        	recipient
+        RETURNING
+        	id,
+            user_account_id
+	)
+    SELECT
+        receipt.id,
+        user_account.id,
+        user_account.name,
+        user_account.email
+    FROM
+    	receipt
+        JOIN core.user_account
+    		ON user_account.id = receipt.user_account_id;
+$$;
+
+
+--
+-- Name: create_email_notification(text, text, text, text); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.create_email_notification(notification_type text, mail text, bounce text, complaint text) RETURNS void
+    LANGUAGE sql
+    AS $$
+    INSERT INTO email_notification
+        (notification_type, mail, bounce, complaint)
+    VALUES
+		(notification_type, mail::json, bounce::json, complaint::json);
+$$;
+
+
+--
+-- Name: create_follower_digest_notifications(text); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.create_follower_digest_notifications(frequency text) RETURNS SETOF notifications.follower_digest_dispatch
+    LANGUAGE sql
+    AS $$
+    WITH follower AS (
+    	SELECT
+    		recipient.id AS recipient_id,
+    	    recipient.name AS recipient_name,
+	        recipient.email AS recipient_email,
+    	    active_following.id AS following_id,
+			active_following.date_followed AS date_followed,
+    	    follower.name AS user_name
+		FROM
+			notifications.current_preference AS preference
+			JOIN core.user_account AS recipient
+			    ON recipient.id = preference.user_account_id
+			JOIN social.active_following
+    			ON active_following.followee_user_account_id = recipient.id
+    		JOIN core.user_account AS follower
+    			ON follower.id = active_following.follower_user_account_id
+		WHERE
+			preference.follower_digest_via_email = create_follower_digest_notifications.frequency::core.notification_event_frequency AND
+		    active_following.date_followed >= (
+		        CASE create_follower_digest_notifications.frequency
+					WHEN 'daily' THEN core.utc_now() - '1 day'::interval
+					WHEN 'weekly' THEN core.utc_now() - '1 week'::interval
+				END
+		    )
+	),
+    recipient AS (
+      	SELECT
+        	DISTINCT recipient_id
+        FROM
+        	follower
+	),
+    follower_event AS (
+		INSERT INTO
+			core.notification_event (type)
+		SELECT
+        	CASE create_follower_digest_notifications.frequency
+				WHEN 'daily' THEN 'follower_daily_digest'::core.notification_event_type
+				WHEN 'weekly' THEN 'follower_weekly_digest'::core.notification_event_type
+			END
+        FROM
+        	recipient
+        RETURNING
+        	id
+	),
+    recipient_event AS (
+        SELECT
+            numbered_recipient.id AS recipient_id,
+        	numbered_event.id AS event_id
+        FROM
+		(
+			SELECT
+				recipient_id AS id,
+				row_number() OVER (ORDER BY recipient_id) AS row_number
+			FROM
+				recipient
+		) AS numbered_recipient
+		JOIN (
+			SELECT
+				id,
+				row_number() OVER (ORDER BY id) AS row_number
+			FROM
+				follower_event
+		) AS numbered_event
+			ON numbered_event.row_number = numbered_recipient.row_number
+	),
+    receipt AS (
+        INSERT INTO
+			core.notification_receipt (
+				event_id,
+				user_account_id,
+				via_email,
+				via_extension,
+				via_push
+			)
+		SELECT
+			recipient_event.event_id,
+		    recipient_event.recipient_id,
+		    TRUE,
+		    FALSE,
+		    FALSE
+        FROM
+        	recipient_event
+        RETURNING
+        	id,
+            user_account_id
+	),
+    follower_data AS (
+		INSERT INTO
+			core.notification_data (
+				event_id,
+				following_id
+			)
+		SELECT
+			recipient_event.event_id,
+			follower.following_id
+		FROM
+			recipient_event
+        	JOIN follower
+        		ON follower.recipient_id = recipient_event.recipient_id
+	)
+    SELECT
+        receipt.id,
+        follower.recipient_id,
+        follower.recipient_name,
+        follower.recipient_email,
+        follower.following_id,
+		follower.date_followed,
+		follower.user_name
+    FROM
+    	receipt
+        JOIN follower
+    		ON follower.recipient_id = receipt.user_account_id;
+$$;
+
+
+--
+-- Name: create_follower_notification(bigint, bigint, bigint); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.create_follower_notification(following_id bigint, follower_id bigint, followee_id bigint) RETURNS SETOF notifications.alert_dispatch
+    LANGUAGE plpgsql
+    AS $$
+<<locals>>
+DECLARE
+    event_id bigint;
+BEGIN
+    -- only notify on the first following
+    IF (
+		(
+		    SELECT
+		    	count(*)
+		    FROM
+		    	following
+		    WHERE
+		        following.follower_user_account_id = create_follower_notification.follower_id AND
+		    	following.followee_user_account_id = create_follower_notification.followee_id
+		) = 1
+	) THEN
+		-- create the event
+		INSERT INTO
+			core.notification_event (
+				type
+			)
+		VALUES
+			(
+				'follower'
+			)
+		RETURNING
+			id INTO locals.event_id;
+		-- create the data
+		INSERT INTO
+			core.notification_data (
+				event_id,
+				following_id
+			)
+		VALUES
+			(
+				locals.event_id,
+				create_follower_notification.following_id
+			);
+		-- increment the followee's alert count
+		UPDATE
+			user_account
+		SET
+			follower_alert_count = follower_alert_count + 1
+		WHERE
+			id = create_follower_notification.followee_id;
+		-- create receipt and return the dispatch
+		RETURN QUERY
+		WITH receipt AS (
+			INSERT INTO
+				core.notification_receipt (
+					event_id,
+					user_account_id,
+					via_email,
+					via_extension,
+					via_push
+				)
+			(
+				SELECT
+					locals.event_id,
+					create_follower_notification.followee_id,
+					preference.follower_via_email,
+					preference.follower_via_extension,
+					preference.follower_via_push
+				FROM
+					notifications.current_preference AS preference
+				WHERE
+					user_account_id = create_follower_notification.followee_id
+			)
+			RETURNING
+		    	id,
+			    user_account_id,
+			    via_email,
+			    via_push
+		)
+		SELECT
+			receipt.id,
+			receipt.via_email,
+			receipt.via_push,
+			user_account.id,
+			user_account.name::text,
+			user_account.email::text,
+			coalesce(array_agg(device.token) FILTER (WHERE device.token IS NOT NULL), '{}'),
+			user_account.aotd_alert,
+			user_account.reply_alert_count,
+			user_account.loopback_alert_count,
+			user_account.post_alert_count,
+			user_account.follower_alert_count
+		FROM
+			receipt
+			JOIN core.user_account ON
+				user_account.id = receipt.user_account_id
+			LEFT JOIN notifications.registered_push_device AS device
+				ON device.user_account_id = receipt.user_account_id
+		WHERE
+			receipt.via_email OR device.id IS NOT NULL
+        GROUP BY
+        	receipt.id,
+            receipt.via_email,
+            receipt.via_push,
+            user_account.id;
+	END IF;
+END;
+$$;
+
+
+--
+-- Name: notification_interaction; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.notification_interaction (
+    id bigint NOT NULL,
+    receipt_id bigint NOT NULL,
+    channel core.notification_channel NOT NULL,
+    action core.notification_action NOT NULL,
+    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    url text,
+    reply_id bigint,
+    CONSTRAINT notification_interaction_check CHECK (((action = 'open'::core.notification_action) OR ((action = 'view'::core.notification_action) AND (url IS NOT NULL)) OR ((action = 'reply'::core.notification_action) AND (reply_id IS NOT NULL))))
+);
+
+
+--
+-- Name: create_interaction(bigint, text, text, text, bigint); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.create_interaction(receipt_id bigint, channel text, action text, url text, reply_id bigint) RETURNS SETOF core.notification_interaction
+    LANGUAGE sql
+    AS $$
+	INSERT INTO
+    	core.notification_interaction (
+			receipt_id,
+    	    channel,
+    	    action,
+    	    url,
+    	    reply_id
+		)
+	VALUES
+    	(
+			create_interaction.receipt_id,
+			create_interaction.channel::core.notification_channel,
+			create_interaction.action::core.notification_action,
+			create_interaction.url,
+			create_interaction.reply_id
+		)
+	RETURNING *;
+$$;
+
+
+--
+-- Name: create_loopback_digest_notifications(text); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.create_loopback_digest_notifications(frequency text) RETURNS SETOF notifications.comment_digest_dispatch
+    LANGUAGE sql
+    AS $$
+    WITH loopback AS (
+    	SELECT
+    		recipient.id AS recipient_id,
+    	    recipient.name AS recipient_name,
+	        recipient.email AS recipient_email,
+	        loopback.id AS comment_id,
+	        loopback.date_created AS date_created,
+	        loopback.text AS comment_text,
+	        loopback_author.name AS author,
+    	    article.id AS article_id,
+    	    article.title AS article_title
+		FROM
+			notifications.current_preference AS preference
+			JOIN core.user_account AS recipient
+			    ON (
+					recipient.id = preference.user_account_id AND
+					preference.loopback_digest_via_email = create_loopback_digest_notifications.frequency::core.notification_event_frequency
+				)
+			JOIN core.user_article
+			    ON (
+			        user_article.user_account_id = recipient.id AND
+			        user_article.date_completed IS NOT NULL
+			    )
+			JOIN core.article
+			    ON article.id = user_article.article_id
+			JOIN core.comment AS loopback
+			    ON (
+					loopback.article_id = article.id AND
+					loopback.user_account_id != recipient.id AND
+					loopback.parent_comment_id IS NULL AND
+					loopback.date_created >= (
+						CASE create_loopback_digest_notifications.frequency
+							WHEN 'daily' THEN core.utc_now() - '1 day'::interval
+							WHEN 'weekly' THEN core.utc_now() - '1 week'::interval
+						END
+					)
+				)
+			JOIN core.user_account AS loopback_author
+			    ON loopback_author.id = loopback.user_account_id
+			LEFT JOIN social.active_following
+			    ON (
+					active_following.follower_user_account_id = recipient.id AND
+					active_following.followee_user_account_id = loopback_author.id
+				)
+		WHERE
+		    active_following.id IS NULL
+	),
+    recipient AS (
+      	SELECT
+        	DISTINCT recipient_id
+        FROM
+        	loopback
+	),
+    loopback_event AS (
+		INSERT INTO
+			core.notification_event (type)
+		SELECT
+        	CASE create_loopback_digest_notifications.frequency
+				WHEN 'daily' THEN 'loopback_daily_digest'::core.notification_event_type
+				WHEN 'weekly' THEN 'loopback_weekly_digest'::core.notification_event_type
+			END
+        FROM
+        	recipient
+        RETURNING
+        	id
+	),
+    recipient_event AS (
+        SELECT
+            numbered_recipient.id AS recipient_id,
+        	numbered_event.id AS event_id
+        FROM
+		(
+			SELECT
+				recipient_id AS id,
+				row_number() OVER (ORDER BY recipient_id) AS row_number
+			FROM
+				recipient
+		) AS numbered_recipient
+		JOIN (
+			SELECT
+				id,
+				row_number() OVER (ORDER BY id) AS row_number
+			FROM
+				loopback_event
+		) AS numbered_event
+			ON numbered_event.row_number = numbered_recipient.row_number
+	),
+    receipt AS (
+        INSERT INTO
+			core.notification_receipt (
+				event_id,
+				user_account_id,
+				via_email,
+				via_extension,
+				via_push
+			)
+		SELECT
+			recipient_event.event_id,
+		    recipient_event.recipient_id,
+		    TRUE,
+		    FALSE,
+		    FALSE
+        FROM
+        	recipient_event
+        RETURNING
+        	id,
+            user_account_id
+	),
+    loopback_data AS (
+		INSERT INTO
+			core.notification_data (
+				event_id,
+				comment_id
+			)
+		SELECT
+			recipient_event.event_id,
+			loopback.comment_id
+		FROM
+			recipient_event
+        	JOIN loopback
+        		ON loopback.recipient_id = recipient_event.recipient_id
+	)
+    SELECT
+        receipt.id,
+        loopback.recipient_id,
+        loopback.recipient_name,
+        loopback.recipient_email,
+        loopback.comment_id,
+		loopback.date_created,
+		loopback.comment_text,
+		loopback.author,
+        loopback.article_id,
+        loopback.article_title
+    FROM
+    	receipt
+        JOIN loopback
+    		ON loopback.recipient_id = receipt.user_account_id;
+$$;
+
+
+--
+-- Name: create_loopback_notifications(bigint, bigint, bigint); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.create_loopback_notifications(article_id bigint, comment_id bigint, comment_author_id bigint) RETURNS SETOF notifications.alert_dispatch
+    LANGUAGE sql
+    AS $$
+    WITH recipient AS (
+        SELECT
+			user_article.user_account_id,
+		    preference.loopback_via_email,
+		    preference.loopback_via_extension,
+		    preference.loopback_via_push
+		FROM
+			core.user_article
+			JOIN notifications.current_preference AS preference ON
+				preference.user_account_id = user_article.user_account_id
+        	LEFT JOIN social.active_following
+        		ON (
+        		    active_following.follower_user_account_id = user_article.user_account_id AND
+        		    active_following.followee_user_account_id = create_loopback_notifications.comment_author_id
+        		)
+	    WHERE
+	    	user_article.article_id = create_loopback_notifications.article_id AND
+	        user_article.user_account_id != create_loopback_notifications.comment_author_id AND
+	        user_article.date_completed IS NOT NULL AND
+	        active_following.id IS NULL
+	),
+    loopback_event AS (
+        INSERT INTO
+			core.notification_event (type)
+		SELECT
+            'loopback'
+        WHERE
+            EXISTS (SELECT * FROM recipient)
+		RETURNING
+			id
+	),
+    loopback_data AS (
+        INSERT INTO
+			core.notification_data (
+				event_id,
+				comment_id
+			)
+		SELECT
+        	id,
+		    create_loopback_notifications.comment_id
+        FROM
+        	loopback_event
+	),
+	receipt AS (
+		INSERT INTO
+			core.notification_receipt (
+				event_id,
+				user_account_id,
+				via_email,
+				via_extension,
+				via_push
+			)
+		(
+			SELECT
+				(SELECT id FROM loopback_event),
+				recipient.user_account_id,
+				recipient.loopback_via_email,
+				recipient.loopback_via_extension,
+				recipient.loopback_via_push
+			FROM
+				recipient
+		)
+		RETURNING
+	    	id,
+		    user_account_id,
+		    via_email,
+		    via_extension,
+		    via_push
+	),
+    alert_cache AS (
+        UPDATE
+			core.user_account
+		SET
+			loopback_alert_count = loopback_alert_count + 1
+		FROM
+			 recipient
+		WHERE
+			user_account.id = recipient.user_account_id
+	)
+	SELECT
+		receipt.id,
+		receipt.via_email,
+		receipt.via_push,
+		user_account.id,
+		user_account.name::text,
+		user_account.email::text,
+		coalesce(array_agg(device.token) FILTER (WHERE device.token IS NOT NULL), '{}'),
+		user_account.aotd_alert,
+		user_account.reply_alert_count,
+		user_account.loopback_alert_count,
+		user_account.post_alert_count,
+		user_account.follower_alert_count
+	FROM
+		receipt
+		JOIN core.user_account ON
+			user_account.id = receipt.user_account_id
+		LEFT JOIN notifications.registered_push_device AS device ON
+			device.user_account_id = receipt.user_account_id
+	WHERE
+		receipt.via_email OR device.id IS NOT NULL
+	GROUP BY
+		receipt.id,
+		receipt.via_email,
+		receipt.via_push,
+		user_account.id;
+$$;
+
+
+--
+-- Name: create_post_digest_notifications(text); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.create_post_digest_notifications(frequency text) RETURNS SETOF notifications.post_digest_dispatch
+    LANGUAGE sql
+    AS $$
+    WITH post AS (
+    	SELECT
+    		recipient.id AS recipient_id,
+    	    recipient.name AS recipient_name,
+	        recipient.email AS recipient_email,
+	        post.comment_id AS comment_id,
+    	    post.silent_post_id AS silent_post_id,
+	        post.date_created AS date_created,
+	        post.comment_text AS comment_text,
+	        post_author.name AS author,
+    	    article.id AS article_id,
+    	    article.title AS article_title
+		FROM
+			notifications.current_preference AS preference
+			JOIN user_account AS recipient
+			    ON recipient.id = preference.user_account_id
+			JOIN social.active_following
+			    ON active_following.follower_user_account_id = preference.user_account_id
+			JOIN social.post
+			    ON post.user_account_id = active_following.followee_user_account_id
+			JOIN core.article
+			    ON article.id = post.article_id
+	    	JOIN core.user_account AS post_author
+	    		ON post_author.id = post.user_account_id
+		WHERE
+			preference.post_digest_via_email = create_post_digest_notifications.frequency::core.notification_event_frequency AND
+		    post.date_created >= (
+		        CASE create_post_digest_notifications.frequency
+					WHEN 'daily' THEN core.utc_now() - '1 day'::interval
+					WHEN 'weekly' THEN core.utc_now() - '1 week'::interval
+				END
+		    )
+	),
+    recipient AS (
+      	SELECT
+        	DISTINCT recipient_id
+        FROM
+        	post
+	),
+    event AS (
+		INSERT INTO
+			core.notification_event (type)
+		SELECT
+        	 CASE create_post_digest_notifications.frequency
+				WHEN 'daily' THEN 'post_daily_digest'::core.notification_event_type
+				WHEN 'weekly' THEN 'post_weekly_digest'::core.notification_event_type
+			END
+        FROM
+        	recipient
+        RETURNING
+        	id
+	),
+    recipient_event AS (
+        SELECT
+            numbered_recipient.id AS recipient_id,
+        	numbered_event.id AS event_id
+        FROM
+		(
+			SELECT
+				recipient_id AS id,
+				row_number() OVER (ORDER BY recipient_id) AS row_number
+			FROM
+				recipient
+		) AS numbered_recipient
+		JOIN (
+			SELECT
+				id,
+				row_number() OVER (ORDER BY id) AS row_number
+			FROM
+				event
+		) AS numbered_event
+			ON numbered_event.row_number = numbered_recipient.row_number
+	),
+    receipt AS (
+        INSERT INTO
+			core.notification_receipt (
+				event_id,
+				user_account_id,
+				via_email,
+				via_extension,
+				via_push
+			)
+		SELECT
+			recipient_event.event_id,
+		    recipient_event.recipient_id,
+		    TRUE,
+		    FALSE,
+		    FALSE
+        FROM
+        	recipient_event
+        RETURNING
+        	id,
+            user_account_id
+	),
+    data AS (
+		INSERT INTO
+			core.notification_data (
+				event_id,
+				comment_id,
+			    silent_post_id
+			)
+		SELECT
+			recipient_event.event_id,
+			post.comment_id,
+		    post.silent_post_id
+		FROM
+			recipient_event
+        	JOIN post
+        		ON post.recipient_id = recipient_event.recipient_id
+	)
+    SELECT
+        receipt.id,
+        post.recipient_id,
+        post.recipient_name,
+        post.recipient_email,
+        post.comment_id,
+        post.silent_post_id,
+		post.date_created,
+		post.comment_text,
+		post.author,
+        post.article_id,
+        post.article_title
+    FROM
+    	receipt
+        JOIN post
+    		ON post.recipient_id = receipt.user_account_id;
+$$;
+
+
+--
+-- Name: create_post_notifications(bigint, bigint, bigint, bigint); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.create_post_notifications(article_id bigint, poster_id bigint, comment_id bigint, silent_post_id bigint) RETURNS SETOF notifications.post_alert_dispatch
+    LANGUAGE sql
+    AS $$
+    WITH recipient AS (
+        SELECT
+			following.follower_user_account_id AS user_account_id,
+		    preference.post_via_email,
+		    preference.post_via_extension,
+		    preference.post_via_push
+		FROM
+			social.active_following AS following
+			JOIN notifications.current_preference AS preference
+			    ON (
+					following.follower_user_account_id = preference.user_account_id AND
+					following.followee_user_account_id = create_post_notifications.poster_id
+				)
+	),
+    post_event AS (
+        INSERT INTO
+			core.notification_event (type)
+		SELECT
+            'post'
+        WHERE
+            EXISTS (SELECT * FROM recipient)
+		RETURNING
+			id
+	),
+    post_data AS (
+        INSERT INTO
+			core.notification_data (
+				event_id,
+				comment_id,
+			    silent_post_id
+			)
+		SELECT
+        	id,
+		    create_post_notifications.comment_id,
+		    create_post_notifications.silent_post_id
+        FROM
+        	post_event
+	),
+	receipt AS (
+		INSERT INTO
+			core.notification_receipt (
+				event_id,
+				user_account_id,
+				via_email,
+				via_extension,
+				via_push
+			)
+		(
+			SELECT
+				(SELECT id FROM post_event),
+				recipient.user_account_id,
+				recipient.post_via_email,
+				recipient.post_via_extension,
+				recipient.post_via_push
+			FROM
+				recipient
+		)
+		RETURNING
+	    	id,
+		    user_account_id,
+		    via_email,
+		    via_extension,
+		    via_push
+	),
+    alert_cache AS (
+        UPDATE
+			core.user_account
+		SET
+			post_alert_count = post_alert_count + 1
+		FROM
+			 recipient
+		WHERE
+			user_account.id = recipient.user_account_id
+	)
+	SELECT
+		receipt.id,
+		receipt.via_email,
+		receipt.via_push,
+	    user_article.date_completed IS NOT NULL AS is_replyable,
+		user_account.id,
+		user_account.name::text,
+		user_account.email::text,
+		coalesce(array_agg(device.token) FILTER (WHERE device.token IS NOT NULL), '{}'),
+		user_account.aotd_alert,
+		user_account.reply_alert_count,
+		user_account.loopback_alert_count,
+		user_account.post_alert_count,
+		user_account.follower_alert_count
+	FROM
+		receipt
+		JOIN core.user_account
+			ON user_account.id = receipt.user_account_id
+		LEFT JOIN core.user_article
+		    ON (
+		        user_article.user_account_id = user_account.id AND
+		        user_article.article_id = create_post_notifications.article_id
+		    )
+		LEFT JOIN notifications.registered_push_device AS device
+			ON device.user_account_id = receipt.user_account_id
+	WHERE
+		receipt.via_email OR device.id IS NOT NULL
+	GROUP BY
+		receipt.id,
+		receipt.via_email,
+		receipt.via_push,
+		user_account.id,
+	    user_article.date_completed;
+$$;
+
+
+--
+-- Name: notification_push_auth_denial; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.notification_push_auth_denial (
+    id bigint NOT NULL,
+    date_denied timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    user_account_id bigint NOT NULL,
+    installation_id text,
+    device_name text
+);
+
+
+--
+-- Name: create_push_auth_denial(bigint, text, text); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.create_push_auth_denial(user_account_id bigint, installation_id text, device_name text) RETURNS SETOF core.notification_push_auth_denial
+    LANGUAGE sql
+    AS $$
+	INSERT INTO
+    	core.notification_push_auth_denial (
+    	    user_account_id,
+    	    installation_id,
+    	    device_name
+    	)
+    VALUES (
+        create_push_auth_denial.user_account_id,
+        create_push_auth_denial.installation_id,
+        create_push_auth_denial.device_name
+	)
+	RETURNING *;
+$$;
+
+
+--
+-- Name: create_reply_digest_notifications(text); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.create_reply_digest_notifications(frequency text) RETURNS SETOF notifications.comment_digest_dispatch
+    LANGUAGE sql
+    AS $$
+    WITH reply AS (
+    	SELECT
+    		recipient.id AS recipient_id,
+    	    recipient.name AS recipient_name,
+	        recipient.email AS recipient_email,
+	        reply.id AS comment_id,
+	        reply.date_created AS comment_date_created,
+	        reply.text AS comment_text,
+	        reply_author.name AS comment_author_name,
+    	    article.id AS comment_article_id,
+    	    article.title AS comment_article_title
+		FROM
+			notifications.current_preference AS preference
+			JOIN user_account AS recipient
+			    ON recipient.id = preference.user_account_id
+			JOIN core.comment
+			    ON comment.user_account_id = preference.user_account_id
+	    	JOIN core.comment AS reply
+	    		ON (
+	    		    reply.parent_comment_id = comment.id AND
+	    		    reply.user_account_id != preference.user_account_id AND
+	    		    reply.date_created >= CASE create_reply_digest_notifications.frequency
+						WHEN 'daily' THEN core.utc_now() - '1 day'::interval
+						WHEN 'weekly' THEN core.utc_now() - '1 week'::interval
+					END
+	    		)
+			JOIN core.article
+			    ON article.id = reply.article_id
+	    	JOIN core.user_account AS reply_author
+	    		ON reply_author.id = reply.user_account_id
+		WHERE
+			preference.reply_digest_via_email = create_reply_digest_notifications.frequency::core.notification_event_frequency
+	),
+    recipient AS (
+      	SELECT
+        	DISTINCT recipient_id
+        FROM
+        	reply
+	),
+    event AS (
+		INSERT INTO
+			core.notification_event (type)
+		SELECT
+        	CASE create_reply_digest_notifications.frequency
+				WHEN 'daily' THEN 'reply_daily_digest'::core.notification_event_type
+				WHEN 'weekly' THEN 'reply_weekly_digest'::core.notification_event_type
+			END
+        FROM
+        	recipient
+        RETURNING
+        	id
+	),
+    recipient_event AS (
+        SELECT
+            numbered_recipient.id AS recipient_id,
+        	numbered_event.id AS event_id
+        FROM
+		(
+			SELECT
+				recipient_id AS id,
+				row_number() OVER (ORDER BY recipient_id) AS row_number
+			FROM
+				recipient
+		) AS numbered_recipient
+		JOIN (
+			SELECT
+				id,
+				row_number() OVER (ORDER BY id) AS row_number
+			FROM
+				event
+		) AS numbered_event
+			ON numbered_event.row_number = numbered_recipient.row_number
+	),
+    receipt AS (
+        INSERT INTO
+			core.notification_receipt (
+				event_id,
+				user_account_id,
+				via_email,
+				via_extension,
+				via_push
+			)
+		SELECT
+			recipient_event.event_id,
+		    recipient_event.recipient_id,
+		    TRUE,
+		    FALSE,
+		    FALSE
+        FROM
+        	recipient_event
+        RETURNING
+        	id,
+            user_account_id
+	),
+    data AS (
+		INSERT INTO
+			core.notification_data (
+				event_id,
+				comment_id
+			)
+		SELECT
+			recipient_event.event_id,
+			reply.comment_id
+		FROM
+			recipient_event
+        	JOIN reply
+        		ON reply.recipient_id = recipient_event.recipient_id
+	)
+    SELECT
+        receipt.id,
+        reply.recipient_id,
+        reply.recipient_name,
+        reply.recipient_email,
+        reply.comment_id,
+		reply.comment_date_created,
+		reply.comment_text,
+		reply.comment_author_name,
+        reply.comment_article_id,
+        reply.comment_article_title
+    FROM
+    	receipt
+        JOIN reply
+    		ON reply.recipient_id = receipt.user_account_id;
+$$;
+
+
+--
+-- Name: create_reply_notification(bigint, bigint, bigint); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.create_reply_notification(reply_id bigint, reply_author_id bigint, parent_id bigint) RETURNS SETOF notifications.alert_dispatch
+    LANGUAGE plpgsql
+    AS $$
+<<locals>>
+DECLARE
+    parent_author_id bigint;
+    event_id bigint;
+BEGIN
+    -- lookup the parent author
+    SELECT
+    	user_account_id
+    INTO
+        locals.parent_author_id
+    FROM
+    	core.comment
+    WHERE
+    	id = parent_id;
+    -- check for a self-reply
+    IF create_reply_notification.reply_author_id != locals.parent_author_id THEN
+		-- create the event
+		INSERT INTO
+			core.notification_event (
+				type
+			)
+		VALUES
+			(
+				'reply'
+			)
+		RETURNING
+			id INTO locals.event_id;
+		-- create the data
+		INSERT INTO
+			core.notification_data (
+				event_id,
+				comment_id
+			)
+		VALUES
+			(
+				locals.event_id,
+				create_reply_notification.reply_id
+			);
+		-- increment the parent's alert count
+		UPDATE
+			user_account
+		SET
+			reply_alert_count = reply_alert_count + 1
+		WHERE
+			id = locals.parent_author_id;
+		-- create receipt and return the dispatch
+		RETURN QUERY
+		WITH receipt AS (
+			INSERT INTO
+				core.notification_receipt (
+					event_id,
+					user_account_id,
+					via_email,
+					via_extension,
+					via_push
+				)
+			(
+				SELECT
+					locals.event_id,
+					locals.parent_author_id,
+					preference.reply_via_email,
+					preference.reply_via_extension,
+					preference.reply_via_push
+				FROM
+					notifications.current_preference AS preference
+				WHERE
+					user_account_id = locals.parent_author_id
+			)
+			RETURNING
+		    	id,
+			    user_account_id,
+			    via_email,
+			    via_push
+		)
+		SELECT
+			receipt.id,
+		    receipt.via_email,
+		    receipt.via_push,
+			user_account.id,
+		    user_account.name::text,
+			user_account.email::text,
+		    coalesce(array_agg(device.token) FILTER (WHERE device.token IS NOT NULL), '{}'),
+			user_account.aotd_alert,
+			user_account.reply_alert_count,
+			user_account.loopback_alert_count,
+			user_account.post_alert_count,
+			user_account.follower_alert_count
+		FROM
+			receipt
+			JOIN core.user_account ON
+				user_account.id = receipt.user_account_id
+			LEFT JOIN notifications.registered_push_device AS device
+				ON device.user_account_id = receipt.user_account_id
+		WHERE
+			receipt.via_email OR device.id IS NOT NULL
+		GROUP BY
+			receipt.id,
+		    receipt.via_email,
+		    receipt.via_push,
+		    user_account.id;
+	END IF;
+END;
+$$;
+
+
+--
+-- Name: create_transactional_notification(bigint, text, bigint, bigint); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.create_transactional_notification(user_account_id bigint, event_type text, email_confirmation_id bigint, password_reset_request_id bigint) RETURNS SETOF notifications.email_dispatch
+    LANGUAGE sql
+    AS $$
+    WITH transactional_event AS (
+		INSERT INTO
+			core.notification_event (type)
+		VALUES
+		    (create_transactional_notification.event_type::core.notification_event_type)
+        RETURNING
+        	id
+	),
+    transactional_data AS (
+      	INSERT INTO
+        	core.notification_data (
+        		event_id,
+        	    email_confirmation_id,
+        	    password_reset_request_id
+			)
+    	VALUES (
+    	    (SELECT id FROM transactional_event),
+			create_transactional_notification.email_confirmation_id,
+    	    create_transactional_notification.password_reset_request_id
+		)
+	),
+    receipt AS (
+        INSERT INTO
+			core.notification_receipt (
+				event_id,
+				user_account_id,
+				via_email,
+				via_extension,
+				via_push
+			)
+		SELECT
+			(SELECT id FROM transactional_event),
+		    create_transactional_notification.user_account_id,
+		    TRUE,
+		    FALSE,
+		    FALSE
+        RETURNING
+        	id
+	)
+    SELECT
+        (SELECT id FROM receipt),
+        user_account.id,
+        user_account.name,
+        user_account.email
+    FROM
+    	core.user_account
+    WHERE
+    	id = create_transactional_notification.user_account_id;
+$$;
+
+
+--
+-- Name: get_blocked_email_addresses(); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.get_blocked_email_addresses() RETURNS SETOF text
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT DISTINCT lower(recipient->>'email_address')
+	FROM (
+		SELECT jsonb_array_elements(bounce->'bounced_recipients')
+		FROM email_notification
+		UNION ALL
+		SELECT jsonb_array_elements(complaint->'complained_recipients')
+		FROM email_notification
+	) AS row (recipient);
+$$;
+
+
+--
+-- Name: get_bulk_mailings(); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.get_bulk_mailings() RETURNS TABLE(id bigint, date_sent timestamp without time zone, subject text, body text, type core.notification_event_type, user_account text, recipient_count bigint)
+    LANGUAGE sql
+    AS $$
+	SELECT
+		event.id,
+		event.date_created,
+		event.bulk_email_subject,
+		event.bulk_email_body,
+		event.type,
+		user_account.name AS user_account,
+		count(*) AS recipient_count
+	FROM
+		notification_event AS event
+		JOIN user_account ON user_account.id = event.bulk_email_author_id
+		JOIN notification_receipt ON notification_receipt.event_id = event.id
+	GROUP BY
+		event.id, user_account.id;
+$$;
+
+
+--
+-- Name: notification; Type: VIEW; Schema: notifications; Owner: -
+--
+
+CREATE VIEW notifications.notification AS
+SELECT
+    NULL::bigint AS event_id,
+    NULL::timestamp without time zone AS date_created,
+    NULL::core.notification_event_type AS event_type,
+    NULL::bigint[] AS article_ids,
+    NULL::bigint[] AS comment_ids,
+    NULL::bigint[] AS silent_post_ids,
+    NULL::bigint[] AS following_ids,
+    NULL::bigint AS receipt_id,
+    NULL::bigint AS user_account_id,
+    NULL::timestamp without time zone AS date_alert_cleared,
+    NULL::boolean AS via_email,
+    NULL::boolean AS via_extension,
+    NULL::boolean AS via_push;
+
+
+--
+-- Name: get_extension_notifications(bigint, timestamp without time zone, bigint[]); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.get_extension_notifications(user_account_id bigint, since_date timestamp without time zone, excluded_receipt_ids bigint[]) RETURNS SETOF notifications.notification
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT
+    	*
+    FROM
+    	notifications.notification
+    WHERE
+    	notification.user_account_id = get_extension_notifications.user_account_id AND
+        notification.via_extension AND
+        notification.date_created >= get_extension_notifications.since_date AND
+        notification.date_alert_cleared IS NULL AND
+    	NOT notification.receipt_id = ANY (get_extension_notifications.excluded_receipt_ids);
+$$;
+
+
+--
+-- Name: get_notification(bigint); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.get_notification(receipt_id bigint) RETURNS SETOF notifications.notification
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT
+		*
+    FROM
+    	notifications.notification
+	WHERE
+		notification.receipt_id = get_notification.receipt_id;
+$$;
+
+
+--
+-- Name: get_notifications(bigint[]); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.get_notifications(receipt_ids bigint[]) RETURNS SETOF notifications.notification
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT
+		*
+    FROM
+    	notifications.notification
+	WHERE
+		notification.receipt_id = ANY (get_notifications.receipt_ids);
+$$;
+
+
+--
+-- Name: notification_preference; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.notification_preference (
+    id bigint NOT NULL,
+    user_account_id bigint NOT NULL,
+    last_modified timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    company_update_via_email boolean DEFAULT true NOT NULL,
+    aotd_via_email boolean DEFAULT true NOT NULL,
+    aotd_via_extension boolean DEFAULT true NOT NULL,
+    aotd_via_push boolean DEFAULT true NOT NULL,
+    aotd_digest_via_email core.notification_event_frequency DEFAULT 'never'::core.notification_event_frequency NOT NULL,
+    reply_via_email boolean DEFAULT true NOT NULL,
+    reply_via_extension boolean DEFAULT true NOT NULL,
+    reply_via_push boolean DEFAULT true NOT NULL,
+    reply_digest_via_email core.notification_event_frequency DEFAULT 'never'::core.notification_event_frequency NOT NULL,
+    loopback_via_email boolean DEFAULT true NOT NULL,
+    loopback_via_extension boolean DEFAULT true NOT NULL,
+    loopback_via_push boolean DEFAULT true NOT NULL,
+    loopback_digest_via_email core.notification_event_frequency DEFAULT 'never'::core.notification_event_frequency NOT NULL,
+    post_via_email boolean DEFAULT true NOT NULL,
+    post_via_extension boolean DEFAULT true NOT NULL,
+    post_via_push boolean DEFAULT true NOT NULL,
+    post_digest_via_email core.notification_event_frequency DEFAULT 'never'::core.notification_event_frequency NOT NULL,
+    follower_via_email boolean DEFAULT true NOT NULL,
+    follower_via_extension boolean DEFAULT true NOT NULL,
+    follower_via_push boolean DEFAULT true NOT NULL,
+    follower_digest_via_email core.notification_event_frequency DEFAULT 'never'::core.notification_event_frequency NOT NULL,
+    CONSTRAINT notification_preference_aotd_digest_via_email_check CHECK ((aotd_digest_via_email <> 'daily'::core.notification_event_frequency))
+);
+
+
+--
+-- Name: get_preference(bigint); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.get_preference(user_account_id bigint) RETURNS SETOF core.notification_preference
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT
+		*
+    FROM
+    	notifications.current_preference
+    WHERE
+    	user_account_id = get_preference.user_account_id;
+$$;
+
+
+--
+-- Name: notification_push_device; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.notification_push_device (
+    id bigint NOT NULL,
+    date_registered timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    date_unregistered timestamp without time zone,
+    unregistration_reason core.notification_push_unregistration_reason,
+    user_account_id bigint NOT NULL,
+    installation_id text NOT NULL,
+    name text,
+    token text NOT NULL
+);
+
+
+--
+-- Name: get_registered_push_devices(bigint); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.get_registered_push_devices(user_account_id bigint) RETURNS SETOF core.notification_push_device
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT
+    	*
+    FROM
+    	notifications.registered_push_device
+    WHERE
+    	user_account_id = get_registered_push_devices.user_account_id;
+$$;
+
+
+--
+-- Name: register_push_device(bigint, text, text, text); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.register_push_device(user_account_id bigint, installation_id text, name text, token text) RETURNS SETOF core.notification_push_device
+    LANGUAGE plpgsql
+    AS $$
+<<locals>>
+DECLARE
+    existing_device core.notification_push_device;
+BEGIN
+    -- check for existing registered device with matching installation_id
+	SELECT
+    	*
+	INTO
+		locals.existing_device
+    FROM
+    	notifications.registered_push_device AS device
+    WHERE
+        device.installation_id = register_push_device.installation_id;
+    -- create a new registration if needed
+    IF (
+    	locals.existing_device IS NULL OR
+    	locals.existing_device.user_account_id != register_push_device.user_account_id OR
+    	locals.existing_device.token != register_push_device.token
+    ) THEN
+        -- unregister the existing device if the user or token has changed
+        IF locals.existing_device IS NOT NULL THEN
+			UPDATE
+			    core.notification_push_device
+            SET
+                date_unregistered = core.utc_now(),
+                unregistration_reason = (
+                    CASE WHEN locals.existing_device.user_account_id != register_push_device.user_account_id
+                        THEN 'user_change'
+                        ELSE 'token_change'
+                    END
+				)
+            WHERE
+            	id = locals.existing_device.id;
+		END IF;
+        -- create the registration and return the result
+        RETURN QUERY
+		INSERT INTO
+		    core.notification_push_device (
+		        user_account_id,
+		        installation_id,
+		        name,
+				token
+		    )
+		VALUES (
+		    register_push_device.user_account_id,
+			register_push_device.installation_id,
+			register_push_device.name,
+			register_push_device.token
+		)
+		RETURNING *;
+	END IF;
+END;
+$$;
+
+
+--
+-- Name: set_preference(bigint, boolean, boolean, boolean, boolean, text, boolean, boolean, boolean, text, boolean, boolean, boolean, text, boolean, boolean, boolean, text, boolean, boolean, boolean, text); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.set_preference(user_account_id bigint, company_update_via_email boolean, aotd_via_email boolean, aotd_via_extension boolean, aotd_via_push boolean, aotd_digest_via_email text, reply_via_email boolean, reply_via_extension boolean, reply_via_push boolean, reply_digest_via_email text, loopback_via_email boolean, loopback_via_extension boolean, loopback_via_push boolean, loopback_digest_via_email text, post_via_email boolean, post_via_extension boolean, post_via_push boolean, post_digest_via_email text, follower_via_email boolean, follower_via_extension boolean, follower_via_push boolean, follower_digest_via_email text) RETURNS SETOF core.notification_preference
+    LANGUAGE plpgsql
+    AS $$
+<<locals>>
+DECLARE
+    existing_preference_id bigint;
+BEGIN
+    -- casting from text to frequency because of poor mapping in api layer
+    -- check for an existing record
+	SELECT
+		preference.id
+    INTO
+    	locals.existing_preference_id
+    FROM
+    	core.notification_preference AS preference
+    WHERE
+    	preference.user_account_id = set_preference.user_account_id AND
+    	preference.last_modified >= core.utc_now() - '1 hour'::interval
+    ORDER BY
+    	preference.last_modified DESC
+    LIMIT 1;
+    -- update the existing record or create a new one
+    IF existing_preference_id IS NOT NULL THEN
+        RETURN QUERY
+		UPDATE
+		    core.notification_preference
+        SET
+            last_modified = core.utc_now(),
+            company_update_via_email = set_preference.company_update_via_email,
+			aotd_via_email = set_preference.aotd_via_email,
+			aotd_via_extension = set_preference.aotd_via_extension,
+			aotd_via_push = set_preference.aotd_via_push,
+            aotd_digest_via_email = set_preference.aotd_digest_via_email::core.notification_event_frequency,
+			reply_via_email = set_preference.reply_via_email,
+			reply_via_extension = set_preference.reply_via_extension,
+			reply_via_push = set_preference.reply_via_push,
+			reply_digest_via_email = set_preference.reply_digest_via_email::core.notification_event_frequency,
+			loopback_via_email = set_preference.loopback_via_email,
+			loopback_via_extension = set_preference.loopback_via_extension,
+			loopback_via_push = set_preference.loopback_via_push,
+			loopback_digest_via_email = set_preference.loopback_digest_via_email::core.notification_event_frequency,
+			post_via_email = set_preference.post_via_email,
+			post_via_extension = set_preference.post_via_extension,
+			post_via_push = set_preference.post_via_push,
+			post_digest_via_email = set_preference.post_digest_via_email::core.notification_event_frequency,
+			follower_via_email = set_preference.follower_via_email,
+			follower_via_extension = set_preference.follower_via_extension,
+			follower_via_push = set_preference.follower_via_push,
+			follower_digest_via_email = set_preference.follower_digest_via_email::core.notification_event_frequency
+        WHERE
+        	id = locals.existing_preference_id
+        RETURNING *;
+	ELSE
+	    RETURN QUERY
+    	INSERT INTO
+    	    core.notification_preference (
+    	        user_account_id,
+    	        company_update_via_email,
+				aotd_via_email,
+				aotd_via_extension,
+				aotd_via_push,
+    	        aotd_digest_via_email,
+				reply_via_email,
+				reply_via_extension,
+				reply_via_push,
+				reply_digest_via_email,
+				loopback_via_email,
+				loopback_via_extension,
+				loopback_via_push,
+				loopback_digest_via_email,
+				post_via_email,
+				post_via_extension,
+				post_via_push,
+				post_digest_via_email,
+				follower_via_email,
+				follower_via_extension,
+				follower_via_push,
+				follower_digest_via_email
+			)
+		VALUES (
+		    set_preference.user_account_id,
+			set_preference.company_update_via_email,
+			set_preference.aotd_via_email,
+			set_preference.aotd_via_extension,
+			set_preference.aotd_via_push,
+		    set_preference.aotd_digest_via_email::core.notification_event_frequency,
+			set_preference.reply_via_email,
+			set_preference.reply_via_extension,
+			set_preference.reply_via_push,
+			set_preference.reply_digest_via_email::core.notification_event_frequency,
+			set_preference.loopback_via_email,
+			set_preference.loopback_via_extension,
+			set_preference.loopback_via_push,
+			set_preference.loopback_digest_via_email::core.notification_event_frequency,
+			set_preference.post_via_email,
+			set_preference.post_via_extension,
+			set_preference.post_via_push,
+			set_preference.post_digest_via_email::core.notification_event_frequency,
+			set_preference.follower_via_email,
+			set_preference.follower_via_extension,
+			set_preference.follower_via_push,
+			set_preference.follower_digest_via_email::core.notification_event_frequency
+		)
+		RETURNING *;
+    END IF;
+END;
+$$;
+
+
+--
+-- Name: unregister_push_device_by_installation_id(text, text); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.unregister_push_device_by_installation_id(installation_id text, reason text) RETURNS SETOF core.notification_push_device
+    LANGUAGE sql
+    AS $$
+	UPDATE
+		core.notification_push_device AS device
+    SET
+    	date_unregistered = core.utc_now(),
+        unregistration_reason = unregister_push_device_by_installation_id.reason::core.notification_push_unregistration_reason
+    WHERE
+    	device.installation_id = unregister_push_device_by_installation_id.installation_id AND
+        device.date_unregistered IS NULL
+    RETURNING *;
+$$;
+
+
+--
+-- Name: unregister_push_device_by_token(text, text); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.unregister_push_device_by_token(token text, reason text) RETURNS SETOF core.notification_push_device
+    LANGUAGE sql
+    AS $$
+	UPDATE
+		core.notification_push_device AS device
+    SET
+    	date_unregistered = core.utc_now(),
+        unregistration_reason = unregister_push_device_by_token.reason::core.notification_push_unregistration_reason
+    WHERE
+    	device.token = unregister_push_device_by_token.token AND
+        device.date_unregistered IS NULL
+    RETURNING *;
+$$;
+
+
+--
+-- Name: following; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.following (
+    id bigint NOT NULL,
+    follower_user_account_id bigint NOT NULL,
+    followee_user_account_id bigint NOT NULL,
+    date_followed timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    date_unfollowed timestamp without time zone,
+    follow_analytics jsonb NOT NULL,
+    unfollow_analytics jsonb,
+    CONSTRAINT following_check CHECK ((follower_user_account_id <> followee_user_account_id))
+);
+
+
+--
 -- Name: create_following(bigint, text, text); Type: FUNCTION; Schema: social; Owner: -
 --
 
-CREATE FUNCTION social.create_following(follower_user_id bigint, followee_user_name text, analytics text) RETURNS void
+CREATE FUNCTION social.create_following(follower_user_id bigint, followee_user_name text, analytics text) RETURNS SETOF core.following
     LANGUAGE sql
     AS $$
 	INSERT INTO core.following
@@ -2060,7 +4143,8 @@ CREATE FUNCTION social.create_following(follower_user_id bigint, followee_user_n
     		create_following.follower_user_id,
     	 	user_account_api.get_user_account_id_by_name(create_following.followee_user_name),
     	 	create_following.analytics::jsonb
-		);
+		)
+	RETURNING *;
 $$;
 
 
@@ -2124,7 +4208,9 @@ CREATE FUNCTION social.get_followees(user_account_id bigint) RETURNS SETOF text
     	social.active_following
     	LEFT JOIN user_account AS followee ON followee.id = active_following.followee_user_account_id
     WHERE
-    	active_following.follower_user_account_id = get_followees.user_account_id;
+    	active_following.follower_user_account_id = get_followees.user_account_id
+    ORDER BY
+    	active_following.date_followed DESC;
 $$;
 
 
@@ -2132,12 +4218,13 @@ $$;
 -- Name: get_followers(bigint, text); Type: FUNCTION; Schema: social; Owner: -
 --
 
-CREATE FUNCTION social.get_followers(viewer_user_id bigint, subject_user_name text) RETURNS SETOF social.following
+CREATE FUNCTION social.get_followers(viewer_user_id bigint, subject_user_name text) RETURNS SETOF social.follower
     LANGUAGE sql STABLE
     AS $$
 	SELECT
 		follower.name AS user_name,
-	   	viewer_following.id IS NOT NULL AS is_followed
+	   	viewer_following.id IS NOT NULL AS is_followed,
+		alert.following_id IS NOT NULL AS has_alert
 	FROM
 		social.active_following AS subject_following
 		JOIN core.user_account AS follower ON follower.id = subject_following.follower_user_account_id
@@ -2145,8 +4232,44 @@ CREATE FUNCTION social.get_followers(viewer_user_id bigint, subject_user_name te
 			viewer_following.follower_user_account_id = get_followers.viewer_user_id AND
 			viewer_following.followee_user_account_id = follower.id
 		)
+		LEFT JOIN (
+			SELECT
+				notification_data.following_id
+		 	FROM
+		    	notification_event
+		    	JOIN notification_data
+		    	    ON (
+						notification_event.type = 'follower' AND
+						notification_data.event_id = notification_event.id
+					)
+		    	JOIN notification_receipt AS receipt
+		    		ON (
+		    		    receipt.event_id = notification_event.id AND
+		    		    receipt.user_account_id = get_followers.viewer_user_id AND
+						receipt.date_alert_cleared IS NULL
+					)
+		) AS alert
+			ON alert.following_id = subject_following.id
     WHERE
-        subject_following.followee_user_account_id = user_account_api.get_user_account_id_by_name(get_followers.subject_user_name);
+        subject_following.followee_user_account_id = user_account_api.get_user_account_id_by_name(get_followers.subject_user_name)
+    ORDER BY
+    	subject_following.date_followed DESC;
+$$;
+
+
+--
+-- Name: get_following(bigint); Type: FUNCTION; Schema: social; Owner: -
+--
+
+CREATE FUNCTION social.get_following(following_id bigint) RETURNS SETOF core.following
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT
+    	*
+    FROM
+    	core.following
+    WHERE
+    	id = get_following.following_id;
 $$;
 
 
@@ -2157,9 +4280,14 @@ $$;
 CREATE FUNCTION social.get_posts_from_followees(user_id bigint, page_number integer, page_size integer, min_length integer, max_length integer) RETURNS SETOF social.article_post_page_result
     LANGUAGE sql STABLE
     AS $$
-	WITH selected_post AS (
+	WITH followee_post AS (
 	    SELECT
-	    	post.*
+	    	post.article_id,
+	        post.user_account_id,
+	        post.date_created,
+	        post.comment_id,
+	        post.comment_text,
+	        post.silent_post_id
 	    FROM
 	    	social.post
 	    	JOIN core.article ON article.id = post.article_id
@@ -2176,7 +4304,7 @@ CREATE FUNCTION social.get_posts_from_followees(user_id bigint, page_number inte
 	    SELECT
 	    	*
 	    FROM
-	    	selected_post
+	    	followee_post
 	    ORDER BY
 			date_created DESC
 		OFFSET
@@ -2190,11 +4318,16 @@ CREATE FUNCTION social.get_posts_from_followees(user_id bigint, page_number inte
 		user_account.name AS user_name,
 		paginated_post.comment_id,
 		paginated_post.comment_text,
+        paginated_post.silent_post_id,
+		(
+			alert.comment_id IS NOT NULL OR
+			alert.silent_post_id IS NOT NULL
+		) AS has_alert,
 		(
 		    SELECT
 		    	count(*)
 		    FROM
-		        selected_post
+		        followee_post
 		) AS total_count
 	FROM
 		article_api.get_articles(
@@ -2208,8 +4341,139 @@ CREATE FUNCTION social.get_posts_from_followees(user_id bigint, page_number inte
 		) AS article
 		JOIN paginated_post ON paginated_post.article_id = article.id
 		JOIN user_account ON user_account.id = paginated_post.user_account_id
+		LEFT JOIN (
+		    SELECT
+				data.comment_id,
+		        data.silent_post_id
+		    FROM
+		    	notification_event AS event
+		    	JOIN notification_receipt ON notification_receipt.event_id = event.id
+		    	JOIN notification_data AS data ON data.event_id = event.id
+		    WHERE
+		    	event.type = 'post' AND
+		        notification_receipt.user_account_id = get_posts_from_followees.user_id AND
+		        notification_receipt.date_alert_cleared IS NULL AND
+		        (
+		            data.comment_id IN (
+						SELECT
+							comment_id
+						FROM
+							paginated_post
+					) OR
+		            data.silent_post_id IN (
+						SELECT
+							silent_post_id
+						FROM
+							paginated_post
+					)
+		        )
+		) AS alert ON (
+		    alert.comment_id = paginated_post.comment_id OR
+		    alert.silent_post_id = paginated_post.silent_post_id
+		)
     ORDER BY
     	paginated_post.date_created DESC
+$$;
+
+
+--
+-- Name: get_posts_from_inbox(bigint, integer, integer); Type: FUNCTION; Schema: social; Owner: -
+--
+
+CREATE FUNCTION social.get_posts_from_inbox(user_id bigint, page_number integer, page_size integer) RETURNS SETOF social.article_post_page_result
+    LANGUAGE sql STABLE
+    AS $$
+	WITH inbox_comment AS (
+	    SELECT
+	    	reply.id,
+	        reply.date_created,
+	        reply.text,
+	        reply.article_id,
+	        reply.user_account_id
+	    FROM
+	    	core.comment
+	    	JOIN core.comment AS reply ON reply.parent_comment_id = comment.id
+	    WHERE
+	    	comment.user_account_id = get_posts_from_inbox.user_id AND
+	        reply.user_account_id != get_posts_from_inbox.user_id
+	    UNION ALL
+	    SELECT
+	    	comment.id,
+	        comment.date_created,
+	        comment.text,
+	        comment.article_id,
+	        comment.user_account_id
+	    FROM
+	    	core.user_article
+	    	JOIN core.comment ON comment.article_id = user_article.article_id
+	    WHERE
+	    	user_article.user_account_id = get_posts_from_inbox.user_id AND
+	    	user_article.date_completed IS NOT NULL AND
+	        comment.user_account_id != get_posts_from_inbox.user_id AND
+	        comment.parent_comment_id IS NULL AND
+	        comment.date_created > user_article.date_completed
+	),
+	paginated_inbox_comment AS (
+	    SELECT
+	    	*
+	    FROM
+	    	inbox_comment
+	    ORDER BY
+			date_created DESC
+		OFFSET
+			(get_posts_from_inbox.page_number - 1) * get_posts_from_inbox.page_size
+		LIMIT
+			get_posts_from_inbox.page_size
+	)
+    SELECT
+		article.*,
+		paginated_inbox_comment.date_created AS post_date_created,
+		user_account.name AS user_name,
+		paginated_inbox_comment.id AS comment_id,
+		paginated_inbox_comment.text AS comment_text,
+        NULL::bigint AS silent_post_id,
+        alert.comment_id IS NOT NULL AS has_alert,
+		(
+		    SELECT
+		    	count(*)
+		    FROM
+		        inbox_comment
+		) AS total_count
+	FROM
+		article_api.get_articles(
+			get_posts_from_inbox.user_id,
+			VARIADIC ARRAY(
+				SELECT
+				    DISTINCT article_id
+				FROM
+				    paginated_inbox_comment
+			)
+		) AS article
+		JOIN paginated_inbox_comment ON paginated_inbox_comment.article_id = article.id
+		JOIN user_account ON user_account.id = paginated_inbox_comment.user_account_id
+		LEFT JOIN (
+		    SELECT
+				data.comment_id
+		    FROM
+		    	notification_event AS event
+		    	JOIN notification_receipt ON notification_receipt.event_id = event.id
+		    	JOIN notification_data AS data ON data.event_id = event.id
+		    WHERE
+		    	(
+		    	    event.type = 'reply' OR
+		    	    event.type = 'loopback'
+		    	) AND
+		        notification_receipt.user_account_id = get_posts_from_inbox.user_id AND
+		        notification_receipt.date_alert_cleared IS NULL AND
+				data.comment_id IN (
+					SELECT
+						id
+					FROM
+						paginated_inbox_comment
+				)
+		) AS alert ON alert.comment_id = paginated_inbox_comment.id
+    ORDER BY
+    	paginated_inbox_comment.date_created DESC
 $$;
 
 
@@ -2226,13 +4490,23 @@ CREATE FUNCTION social.get_posts_from_user(viewer_user_id bigint, subject_user_n
         FROM
         	user_account_api.get_user_account_id_by_name(get_posts_from_user.subject_user_name) AS user_account (id)
 	),
-	selected_post AS (
+	user_post AS (
 	    SELECT
-	    	*
+	    	post.article_id,
+	        post.user_account_id,
+	        post.date_created,
+	        post.comment_id,
+	        post.comment_text,
+	        post.silent_post_id
 	    FROM
 	    	social.post
 	    WHERE
-	    	user_account_id = (SELECT id FROM subject_user_account)
+	    	user_account_id = (
+	    		SELECT
+	    		    id
+	    		FROM
+	    			subject_user_account
+	    	)
 	    ORDER BY
 			date_created DESC
 		OFFSET
@@ -2242,24 +4516,36 @@ CREATE FUNCTION social.get_posts_from_user(viewer_user_id bigint, subject_user_n
 	)
     SELECT
 		article.*,
-		selected_post.date_created AS post_date_created,
+		user_post.date_created AS post_date_created,
 		(
 		    SELECT
 		    	name
 		    FROM
 		        user_account
 		    WHERE
-		    	id = (SELECT id FROM subject_user_account)
+		    	id = (
+		    	    SELECT
+		    	        id
+		    		FROM
+		    		    subject_user_account
+		    	)
 		) AS user_name,
-		selected_post.comment_id AS comment_id,
-		selected_post.comment_text AS comment_text,
+		user_post.comment_id AS comment_id,
+		user_post.comment_text AS comment_text,
+        user_post.silent_post_id,
+        FALSE AS has_alert,
 		(
 		    SELECT
 		    	count(*)
 		    FROM
 		        social.post
 		    WHERE
-		    	user_account_id = (SELECT id FROM subject_user_account)
+		    	user_account_id = (
+		    	    SELECT
+		    	        id
+		    		FROM
+		    		    subject_user_account
+		    	)
 		) AS total_count
 	FROM
 		article_api.get_articles(
@@ -2268,12 +4554,12 @@ CREATE FUNCTION social.get_posts_from_user(viewer_user_id bigint, subject_user_n
 				SELECT
 				    DISTINCT article_id
 				FROM
-				    selected_post
+				    user_post
 			)
 		) AS article
-		JOIN selected_post ON selected_post.article_id = article.id
+		JOIN user_post ON user_post.article_id = article.id
     ORDER BY
-    	selected_post.date_created DESC
+    	user_post.date_created DESC
 $$;
 
 
@@ -2312,6 +4598,22 @@ CREATE FUNCTION social.get_profile(viewer_user_id bigint, subject_user_name text
     	subject.id = user_account_api.get_user_account_id_by_name(get_profile.subject_user_name)
     GROUP BY
     	subject.id;
+$$;
+
+
+--
+-- Name: get_silent_post(bigint); Type: FUNCTION; Schema: social; Owner: -
+--
+
+CREATE FUNCTION social.get_silent_post(id bigint) RETURNS SETOF core.silent_post
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT
+		*
+    FROM
+    	core.silent_post
+	WHERE
+    	id = get_silent_post.id;
 $$;
 
 
@@ -2996,17 +5298,6 @@ $$;
 
 
 --
--- Name: ack_new_reply(bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
---
-
-CREATE FUNCTION user_account_api.ack_new_reply(user_account_id bigint) RETURNS void
-    LANGUAGE sql
-    AS $$
-	UPDATE user_account SET last_new_reply_ack = utc_now() WHERE id = user_account_id;
-$$;
-
-
---
 -- Name: change_email_address(bigint, text); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
@@ -3060,11 +5351,29 @@ $$;
 CREATE FUNCTION user_account_api.confirm_email_address(email_confirmation_id bigint) RETURNS boolean
     LANGUAGE plpgsql
     AS $$
+<<locals>>
 DECLARE
+    user_account_id bigint;
 	rows_updated int;
 BEGIN
-	UPDATE email_confirmation SET date_confirmed = utc_now() WHERE id = email_confirmation_id AND date_confirmed IS NULL;
+	UPDATE
+	    email_confirmation
+	SET
+		date_confirmed = utc_now()
+	WHERE
+		email_confirmation.id = confirm_email_address.email_confirmation_id AND
+	    email_confirmation.date_confirmed IS NULL
+	RETURNING
+		email_confirmation.user_account_id INTO locals.user_account_id;
 	GET DIAGNOSTICS rows_updated = ROW_COUNT;
+	IF rows_updated = 1 THEN
+		UPDATE
+		    user_account
+	    SET
+	        is_email_confirmed = true
+	    WHERE
+	    	user_account.id = locals.user_account_id;
+	END IF;
 	RETURN rows_updated = 1;
 END;
 $$;
@@ -3083,15 +5392,51 @@ $$;
 
 
 --
+-- Name: email_confirmation; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.email_confirmation (
+    id bigint NOT NULL,
+    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    user_account_id bigint NOT NULL,
+    email_address text NOT NULL,
+    date_confirmed timestamp without time zone
+);
+
+
+--
 -- Name: create_email_confirmation(bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
 CREATE FUNCTION user_account_api.create_email_confirmation(user_account_id bigint) RETURNS SETOF core.email_confirmation
-    LANGUAGE sql
+    LANGUAGE plpgsql
     AS $$
-	INSERT INTO email_confirmation (user_account_id, email_address)
-		VALUES (user_account_id, (SELECT email FROM user_account WHERE id = user_account_id))
-		RETURNING *;
+BEGIN
+    UPDATE
+		user_account
+	SET
+		is_email_confirmed = false
+	WHERE
+		id = create_email_confirmation.user_account_id;
+    RETURN QUERY
+	INSERT INTO
+	    email_confirmation (
+			user_account_id,
+	        email_address
+	    )
+	VALUES (
+		create_email_confirmation.user_account_id,
+		(
+		    SELECT
+		    	email
+			FROM
+				user_account
+		    WHERE
+		    	id = create_email_confirmation.user_account_id
+		)
+	)
+	RETURNING *;
+END;
 $$;
 
 
@@ -3125,22 +5470,36 @@ $$;
 -- Name: create_user_account(text, text, bytea, bytea, bigint, text); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
-CREATE FUNCTION user_account_api.create_user_account(name text, email text, password_hash bytea, password_salt bytea, time_zone_id bigint, analytics text) RETURNS SETOF user_account_api.user_account
-    LANGUAGE plpgsql
+CREATE FUNCTION user_account_api.create_user_account(name text, email text, password_hash bytea, password_salt bytea, time_zone_id bigint, analytics text) RETURNS SETOF core.user_account
+    LANGUAGE sql
     AS $$
-DECLARE
-	user_account_id bigint;
-BEGIN
-	INSERT INTO
-	    user_account (name, email, password_hash, password_salt, time_zone_id, creation_analytics)
-	VALUES
-		(trim(name), trim(email), password_hash, password_salt, time_zone_id, analytics::json)
-	RETURNING id INTO user_account_id;
-	RETURN QUERY
-	SELECT *
-	FROM user_account_api.user_account
-	WHERE id = user_account_id;
-END;
+    WITH new_user AS (
+		INSERT INTO
+			core.user_account (
+				name,
+				email,
+				password_hash,
+				password_salt,
+				time_zone_id,
+				creation_analytics
+			)
+		VALUES
+			(
+				trim(create_user_account.name),
+				trim(create_user_account.email),
+				create_user_account.password_hash,
+				create_user_account.password_salt,
+				create_user_account.time_zone_id,
+				create_user_account.analytics::json
+			)
+		RETURNING *
+    ),
+	initial_preference AS (
+		INSERT INTO
+	    	core.notification_preference (user_account_id)
+	    (SELECT id FROM new_user)
+	)
+    SELECT * FROM new_user;
 $$;
 
 
@@ -3186,22 +5545,6 @@ $$;
 
 
 --
--- Name: get_latest_unread_reply(bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
---
-
-CREATE FUNCTION user_account_api.get_latest_unread_reply(user_account_id bigint) RETURNS SETOF article_api.user_comment
-    LANGUAGE sql
-    AS $$
-	SELECT reply.* FROM article_api.user_comment reply
-		JOIN comment parent ON reply.parent_comment_id = parent.id AND reply.user_account_id != parent.user_account_id
-		JOIN user_account ON parent.user_account_id = user_account.id
-		WHERE user_account.id = get_latest_unread_reply.user_account_id AND reply.date_read IS NULL
-		ORDER BY reply.date_created DESC
-		LIMIT 1;
-$$;
-
-
---
 -- Name: get_password_reset_request(bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
@@ -3216,12 +5559,15 @@ $$;
 -- Name: get_user_account_by_email(text); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
-CREATE FUNCTION user_account_api.get_user_account_by_email(email text) RETURNS SETOF user_account_api.user_account
+CREATE FUNCTION user_account_api.get_user_account_by_email(email text) RETURNS SETOF core.user_account
     LANGUAGE sql STABLE
     AS $$
-	SELECT *
-	FROM user_account_api.user_account
-	WHERE lower(email) = lower(get_user_account_by_email.email);
+	SELECT
+		*
+	FROM
+		core.user_account
+	WHERE
+		lower(email) = lower(get_user_account_by_email.email);
 $$;
 
 
@@ -3229,12 +5575,15 @@ $$;
 -- Name: get_user_account_by_id(bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
-CREATE FUNCTION user_account_api.get_user_account_by_id(user_account_id bigint) RETURNS SETOF user_account_api.user_account
+CREATE FUNCTION user_account_api.get_user_account_by_id(user_account_id bigint) RETURNS SETOF core.user_account
     LANGUAGE sql STABLE
     AS $$
-	SELECT *
-	FROM user_account_api.user_account
-	WHERE id = get_user_account_by_id.user_account_id;
+	SELECT
+		*
+	FROM
+		core.user_account
+	WHERE
+	    id = get_user_account_by_id.user_account_id;
 $$;
 
 
@@ -3242,12 +5591,15 @@ $$;
 -- Name: get_user_account_by_name(text); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
-CREATE FUNCTION user_account_api.get_user_account_by_name(user_name text) RETURNS SETOF user_account_api.user_account
+CREATE FUNCTION user_account_api.get_user_account_by_name(user_name text) RETURNS SETOF core.user_account
     LANGUAGE sql STABLE
     AS $$
-	SELECT *
-	FROM user_account_api.user_account
-	WHERE lower(name) = lower(get_user_account_by_name.user_name);
+	SELECT
+	    *
+	FROM
+		core.user_account
+	WHERE
+		lower(name) = lower(get_user_account_by_name.user_name);
 $$;
 
 
@@ -3264,6 +5616,20 @@ CREATE FUNCTION user_account_api.get_user_account_id_by_name(user_name text) RET
 		core.user_account
 	WHERE
 		lower(name) = lower(get_user_account_id_by_name.user_name);
+$$;
+
+
+--
+-- Name: get_user_accounts(); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.get_user_accounts() RETURNS SETOF core.user_account
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT
+	    *
+	FROM
+	    core.user_account;
 $$;
 
 
@@ -3305,86 +5671,19 @@ $$;
 
 
 --
--- Name: list_user_accounts(); Type: FUNCTION; Schema: user_account_api; Owner: -
---
-
-CREATE FUNCTION user_account_api.list_user_accounts() RETURNS SETOF user_account_api.user_account
-    LANGUAGE sql STABLE
-    AS $$
-	SELECT *
-	FROM user_account_api.user_account;
-$$;
-
-
---
--- Name: record_new_reply_desktop_notification(bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
---
-
-CREATE FUNCTION user_account_api.record_new_reply_desktop_notification(user_account_id bigint) RETURNS void
-    LANGUAGE sql
-    AS $$
-	UPDATE user_account SET last_new_reply_desktop_notification = utc_now() WHERE id = user_account_id;
-$$;
-
-
---
--- Name: update_contact_preferences(bigint, boolean, boolean); Type: FUNCTION; Schema: user_account_api; Owner: -
---
-
-CREATE FUNCTION user_account_api.update_contact_preferences(user_account_id bigint, receive_website_updates boolean, receive_suggested_readings boolean) RETURNS SETOF user_account_api.user_account
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-	UPDATE user_account
-	SET
-		receive_website_updates = update_contact_preferences.receive_website_updates,
-		receive_suggested_readings = update_contact_preferences.receive_suggested_readings
-	WHERE id = user_account_id;
-	RETURN QUERY
-	SELECT *
-	FROM user_account_api.user_account
-	WHERE id = user_account_id;
-END;
-$$;
-
-
---
--- Name: update_notification_preferences(bigint, boolean, boolean); Type: FUNCTION; Schema: user_account_api; Owner: -
---
-
-CREATE FUNCTION user_account_api.update_notification_preferences(user_account_id bigint, receive_reply_email_notifications boolean, receive_reply_desktop_notifications boolean) RETURNS SETOF user_account_api.user_account
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-	UPDATE user_account
-	SET
-		receive_reply_email_notifications = update_notification_preferences.receive_reply_email_notifications,
-		receive_reply_desktop_notifications = update_notification_preferences.receive_reply_desktop_notifications
-	WHERE id = user_account_id;
-	RETURN QUERY
-	SELECT *
-	FROM user_account_api.user_account
-	WHERE id = user_account_id;
-END;
-$$;
-
-
---
 -- Name: update_time_zone(bigint, bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
-CREATE FUNCTION user_account_api.update_time_zone(user_account_id bigint, time_zone_id bigint) RETURNS SETOF user_account_api.user_account
-    LANGUAGE plpgsql
+CREATE FUNCTION user_account_api.update_time_zone(user_account_id bigint, time_zone_id bigint) RETURNS SETOF core.user_account
+    LANGUAGE sql
     AS $$
-BEGIN
-	UPDATE user_account
-	SET time_zone_id = update_time_zone.time_zone_id
-	WHERE id = user_account_id;
-	RETURN QUERY
-	SELECT *
-	FROM user_account_api.user_account
-	WHERE id = user_account_id;
-END;
+	UPDATE
+		core.user_account
+	SET
+		time_zone_id = update_time_zone.time_zone_id
+	WHERE
+		id = update_time_zone.user_account_id
+    RETURNING *;
 $$;
 
 
@@ -3534,50 +5833,6 @@ CREATE SEQUENCE core.author_id_seq
 --
 
 ALTER SEQUENCE core.author_id_seq OWNED BY core.author.id;
-
-
---
--- Name: bulk_mailing; Type: TABLE; Schema: core; Owner: -
---
-
-CREATE TABLE core.bulk_mailing (
-    id bigint NOT NULL,
-    date_sent timestamp without time zone DEFAULT core.utc_now() NOT NULL,
-    subject text NOT NULL,
-    body text NOT NULL,
-    list text NOT NULL,
-    user_account_id bigint NOT NULL
-);
-
-
---
--- Name: bulk_mailing_id_seq; Type: SEQUENCE; Schema: core; Owner: -
---
-
-CREATE SEQUENCE core.bulk_mailing_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: bulk_mailing_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
---
-
-ALTER SEQUENCE core.bulk_mailing_id_seq OWNED BY core.bulk_mailing.id;
-
-
---
--- Name: bulk_mailing_recipient; Type: TABLE; Schema: core; Owner: -
---
-
-CREATE TABLE core.bulk_mailing_recipient (
-    bulk_mailing_id bigint NOT NULL,
-    user_account_id bigint NOT NULL,
-    is_successful boolean NOT NULL
-);
 
 
 --
@@ -3944,22 +6199,6 @@ ALTER SEQUENCE core.extension_removal_id_seq OWNED BY core.extension_removal.id;
 
 
 --
--- Name: following; Type: TABLE; Schema: core; Owner: -
---
-
-CREATE TABLE core.following (
-    id bigint NOT NULL,
-    follower_user_account_id bigint NOT NULL,
-    followee_user_account_id bigint NOT NULL,
-    date_followed timestamp without time zone DEFAULT core.utc_now() NOT NULL,
-    date_unfollowed timestamp without time zone,
-    follow_analytics jsonb NOT NULL,
-    unfollow_analytics jsonb,
-    CONSTRAINT following_check CHECK ((follower_user_account_id <> followee_user_account_id))
-);
-
-
---
 -- Name: following_id_seq; Type: SEQUENCE; Schema: core; Owner: -
 --
 
@@ -3976,6 +6215,170 @@ CREATE SEQUENCE core.following_id_seq
 --
 
 ALTER SEQUENCE core.following_id_seq OWNED BY core.following.id;
+
+
+--
+-- Name: notification_data; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.notification_data (
+    id bigint NOT NULL,
+    event_id bigint NOT NULL,
+    article_id bigint,
+    comment_id bigint,
+    silent_post_id bigint,
+    following_id bigint,
+    email_confirmation_id bigint,
+    password_reset_request_id bigint,
+    CONSTRAINT notification_data_check CHECK (((article_id IS NOT NULL) OR (comment_id IS NOT NULL) OR (silent_post_id IS NOT NULL) OR (following_id IS NOT NULL) OR (email_confirmation_id IS NOT NULL) OR (password_reset_request_id IS NOT NULL)))
+);
+
+
+--
+-- Name: notification_data_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.notification_data_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: notification_data_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.notification_data_id_seq OWNED BY core.notification_data.id;
+
+
+--
+-- Name: notification_event; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.notification_event (
+    id bigint NOT NULL,
+    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    type core.notification_event_type NOT NULL,
+    bulk_email_author_id bigint,
+    bulk_email_subject text,
+    bulk_email_body text
+);
+
+
+--
+-- Name: notification_event_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.notification_event_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: notification_event_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.notification_event_id_seq OWNED BY core.notification_event.id;
+
+
+--
+-- Name: notification_interaction_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.notification_interaction_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: notification_interaction_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.notification_interaction_id_seq OWNED BY core.notification_interaction.id;
+
+
+--
+-- Name: notification_preference_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.notification_preference_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: notification_preference_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.notification_preference_id_seq OWNED BY core.notification_preference.id;
+
+
+--
+-- Name: notification_push_auth_denial_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.notification_push_auth_denial_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: notification_push_auth_denial_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.notification_push_auth_denial_id_seq OWNED BY core.notification_push_auth_denial.id;
+
+
+--
+-- Name: notification_push_device_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.notification_push_device_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: notification_push_device_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.notification_push_device_id_seq OWNED BY core.notification_push_device.id;
+
+
+--
+-- Name: notification_receipt_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.notification_receipt_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: notification_receipt_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.notification_receipt_id_seq OWNED BY core.notification_receipt.id;
 
 
 --
@@ -4194,6 +6597,57 @@ ALTER SEQUENCE core.user_page_id_seq OWNED BY core.user_article.id;
 
 
 --
+-- Name: current_preference; Type: VIEW; Schema: notifications; Owner: -
+--
+
+CREATE VIEW notifications.current_preference AS
+ SELECT preference.id,
+    preference.user_account_id,
+    preference.last_modified,
+    preference.company_update_via_email,
+    preference.aotd_via_email,
+    preference.aotd_via_extension,
+    preference.aotd_via_push,
+    preference.aotd_digest_via_email,
+    preference.reply_via_email,
+    preference.reply_via_extension,
+    preference.reply_via_push,
+    preference.reply_digest_via_email,
+    preference.loopback_via_email,
+    preference.loopback_via_extension,
+    preference.loopback_via_push,
+    preference.loopback_digest_via_email,
+    preference.post_via_email,
+    preference.post_via_extension,
+    preference.post_via_push,
+    preference.post_digest_via_email,
+    preference.follower_via_email,
+    preference.follower_via_extension,
+    preference.follower_via_push,
+    preference.follower_digest_via_email
+   FROM (core.notification_preference preference
+     LEFT JOIN core.notification_preference later_preference ON (((later_preference.user_account_id = preference.user_account_id) AND (later_preference.last_modified > preference.last_modified))))
+  WHERE (later_preference.id IS NULL);
+
+
+--
+-- Name: registered_push_device; Type: VIEW; Schema: notifications; Owner: -
+--
+
+CREATE VIEW notifications.registered_push_device AS
+ SELECT notification_push_device.id,
+    notification_push_device.date_registered,
+    notification_push_device.date_unregistered,
+    notification_push_device.unregistration_reason,
+    notification_push_device.user_account_id,
+    notification_push_device.installation_id,
+    notification_push_device.name,
+    notification_push_device.token
+   FROM core.notification_push_device
+  WHERE (notification_push_device.date_unregistered IS NULL);
+
+
+--
 -- Name: active_following; Type: VIEW; Schema: social; Owner: -
 --
 
@@ -4215,7 +6669,8 @@ CREATE VIEW social.post AS
     comment.user_account_id,
     comment.date_created,
     comment.id AS comment_id,
-    comment.text AS comment_text
+    comment.text AS comment_text,
+    NULL::bigint AS silent_post_id
    FROM core.comment
   WHERE (comment.parent_comment_id IS NULL)
 UNION ALL
@@ -4223,7 +6678,8 @@ UNION ALL
     silent_post.user_account_id,
     silent_post.date_created,
     NULL::bigint AS comment_id,
-    NULL::text AS comment_text
+    NULL::text AS comment_text,
+    silent_post.id AS silent_post_id
    FROM core.silent_post;
 
 
@@ -4285,13 +6741,6 @@ ALTER TABLE ONLY core.article ALTER COLUMN id SET DEFAULT nextval('core.article_
 --
 
 ALTER TABLE ONLY core.author ALTER COLUMN id SET DEFAULT nextval('core.author_id_seq'::regclass);
-
-
---
--- Name: bulk_mailing id; Type: DEFAULT; Schema: core; Owner: -
---
-
-ALTER TABLE ONLY core.bulk_mailing ALTER COLUMN id SET DEFAULT nextval('core.bulk_mailing_id_seq'::regclass);
 
 
 --
@@ -4383,6 +6832,55 @@ ALTER TABLE ONLY core.extension_removal ALTER COLUMN id SET DEFAULT nextval('cor
 --
 
 ALTER TABLE ONLY core.following ALTER COLUMN id SET DEFAULT nextval('core.following_id_seq'::regclass);
+
+
+--
+-- Name: notification_data id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_data ALTER COLUMN id SET DEFAULT nextval('core.notification_data_id_seq'::regclass);
+
+
+--
+-- Name: notification_event id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_event ALTER COLUMN id SET DEFAULT nextval('core.notification_event_id_seq'::regclass);
+
+
+--
+-- Name: notification_interaction id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_interaction ALTER COLUMN id SET DEFAULT nextval('core.notification_interaction_id_seq'::regclass);
+
+
+--
+-- Name: notification_preference id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_preference ALTER COLUMN id SET DEFAULT nextval('core.notification_preference_id_seq'::regclass);
+
+
+--
+-- Name: notification_push_auth_denial id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_push_auth_denial ALTER COLUMN id SET DEFAULT nextval('core.notification_push_auth_denial_id_seq'::regclass);
+
+
+--
+-- Name: notification_push_device id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_push_device ALTER COLUMN id SET DEFAULT nextval('core.notification_push_device_id_seq'::regclass);
+
+
+--
+-- Name: notification_receipt id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_receipt ALTER COLUMN id SET DEFAULT nextval('core.notification_receipt_id_seq'::regclass);
 
 
 --
@@ -4493,22 +6991,6 @@ ALTER TABLE ONLY core.article_tag
 
 ALTER TABLE ONLY core.author
     ADD CONSTRAINT author_pkey PRIMARY KEY (id);
-
-
---
--- Name: bulk_mailing bulk_mailing_pkey; Type: CONSTRAINT; Schema: core; Owner: -
---
-
-ALTER TABLE ONLY core.bulk_mailing
-    ADD CONSTRAINT bulk_mailing_pkey PRIMARY KEY (id);
-
-
---
--- Name: bulk_mailing_recipient bulk_mailing_recipient_pkey; Type: CONSTRAINT; Schema: core; Owner: -
---
-
-ALTER TABLE ONLY core.bulk_mailing_recipient
-    ADD CONSTRAINT bulk_mailing_recipient_pkey PRIMARY KEY (bulk_mailing_id, user_account_id);
 
 
 --
@@ -4629,6 +7111,62 @@ ALTER TABLE ONLY core.extension_removal
 
 ALTER TABLE ONLY core.following
     ADD CONSTRAINT following_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: notification_data notification_data_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_data
+    ADD CONSTRAINT notification_data_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: notification_event notification_event_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_event
+    ADD CONSTRAINT notification_event_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: notification_interaction notification_interaction_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_interaction
+    ADD CONSTRAINT notification_interaction_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: notification_preference notification_preference_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_preference
+    ADD CONSTRAINT notification_preference_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: notification_push_auth_denial notification_push_auth_denial_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_push_auth_denial
+    ADD CONSTRAINT notification_push_auth_denial_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: notification_push_device notification_push_device_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_push_device
+    ADD CONSTRAINT notification_push_device_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: notification_receipt notification_receipt_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_receipt
+    ADD CONSTRAINT notification_receipt_pkey PRIMARY KEY (id);
 
 
 --
@@ -4846,6 +7384,34 @@ CREATE UNIQUE INDEX following_follower_user_account_id_followee_user_account_id_
 
 
 --
+-- Name: notification_interaction_unique_open; Type: INDEX; Schema: core; Owner: -
+--
+
+CREATE UNIQUE INDEX notification_interaction_unique_open ON core.notification_interaction USING btree (receipt_id, channel, action) WHERE (action = 'open'::core.notification_action);
+
+
+--
+-- Name: notification_interaction_unique_view; Type: INDEX; Schema: core; Owner: -
+--
+
+CREATE UNIQUE INDEX notification_interaction_unique_view ON core.notification_interaction USING btree (receipt_id, channel, action, url);
+
+
+--
+-- Name: notification_push_device_unique_registered_installation_id; Type: INDEX; Schema: core; Owner: -
+--
+
+CREATE UNIQUE INDEX notification_push_device_unique_registered_installation_id ON core.notification_push_device USING btree (installation_id) WHERE (date_unregistered IS NULL);
+
+
+--
+-- Name: notification_push_device_unique_registered_token; Type: INDEX; Schema: core; Owner: -
+--
+
+CREATE UNIQUE INDEX notification_push_device_unique_registered_token ON core.notification_push_device USING btree (token) WHERE (date_unregistered IS NULL);
+
+
+--
 -- Name: page_article_id_idx; Type: INDEX; Schema: core; Owner: -
 --
 
@@ -4895,6 +7461,30 @@ CREATE UNIQUE INDEX current_streak_user_account_id_idx ON stats.current_streak U
 
 
 --
+-- Name: notification _RETURN; Type: RULE; Schema: notifications; Owner: -
+--
+
+CREATE OR REPLACE VIEW notifications.notification AS
+ SELECT event.id AS event_id,
+    event.date_created,
+    event.type AS event_type,
+    COALESCE(array_agg(data.article_id) FILTER (WHERE (data.article_id IS NOT NULL)), '{}'::bigint[]) AS article_ids,
+    COALESCE(array_agg(data.comment_id) FILTER (WHERE (data.comment_id IS NOT NULL)), '{}'::bigint[]) AS comment_ids,
+    COALESCE(array_agg(data.silent_post_id) FILTER (WHERE (data.silent_post_id IS NOT NULL)), '{}'::bigint[]) AS silent_post_ids,
+    COALESCE(array_agg(data.following_id) FILTER (WHERE (data.following_id IS NOT NULL)), '{}'::bigint[]) AS following_ids,
+    receipt.id AS receipt_id,
+    receipt.user_account_id,
+    receipt.date_alert_cleared,
+    receipt.via_email,
+    receipt.via_extension,
+    receipt.via_push
+   FROM ((core.notification_event event
+     JOIN core.notification_receipt receipt ON ((receipt.event_id = event.id)))
+     LEFT JOIN core.notification_data data ON ((data.event_id = event.id)))
+  GROUP BY event.id, receipt.id;
+
+
+--
 -- Name: article_author article_author_article_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
 --
 
@@ -4932,30 +7522,6 @@ ALTER TABLE ONLY core.article_tag
 
 ALTER TABLE ONLY core.article_tag
     ADD CONSTRAINT article_tag_tag_id_fkey FOREIGN KEY (tag_id) REFERENCES core.tag(id);
-
-
---
--- Name: bulk_mailing_recipient bulk_mailing_recipient_bulk_mailing_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
---
-
-ALTER TABLE ONLY core.bulk_mailing_recipient
-    ADD CONSTRAINT bulk_mailing_recipient_bulk_mailing_id_fkey FOREIGN KEY (bulk_mailing_id) REFERENCES core.bulk_mailing(id);
-
-
---
--- Name: bulk_mailing_recipient bulk_mailing_recipient_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
---
-
-ALTER TABLE ONLY core.bulk_mailing_recipient
-    ADD CONSTRAINT bulk_mailing_recipient_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
-
-
---
--- Name: bulk_mailing bulk_mailing_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
---
-
-ALTER TABLE ONLY core.bulk_mailing
-    ADD CONSTRAINT bulk_mailing_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
 
 
 --
@@ -5100,6 +7666,126 @@ ALTER TABLE ONLY core.following
 
 ALTER TABLE ONLY core.following
     ADD CONSTRAINT following_follower_user_account_id_fkey FOREIGN KEY (follower_user_account_id) REFERENCES core.user_account(id);
+
+
+--
+-- Name: notification_data notification_data_article_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_data
+    ADD CONSTRAINT notification_data_article_id_fkey FOREIGN KEY (article_id) REFERENCES core.article(id);
+
+
+--
+-- Name: notification_data notification_data_comment_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_data
+    ADD CONSTRAINT notification_data_comment_id_fkey FOREIGN KEY (comment_id) REFERENCES core.comment(id);
+
+
+--
+-- Name: notification_data notification_data_email_confirmation_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_data
+    ADD CONSTRAINT notification_data_email_confirmation_id_fkey FOREIGN KEY (email_confirmation_id) REFERENCES core.email_confirmation(id);
+
+
+--
+-- Name: notification_data notification_data_event_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_data
+    ADD CONSTRAINT notification_data_event_id_fkey FOREIGN KEY (event_id) REFERENCES core.notification_event(id);
+
+
+--
+-- Name: notification_data notification_data_following_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_data
+    ADD CONSTRAINT notification_data_following_id_fkey FOREIGN KEY (following_id) REFERENCES core.following(id);
+
+
+--
+-- Name: notification_data notification_data_password_reset_request_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_data
+    ADD CONSTRAINT notification_data_password_reset_request_id_fkey FOREIGN KEY (password_reset_request_id) REFERENCES core.password_reset_request(id);
+
+
+--
+-- Name: notification_data notification_data_silent_post_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_data
+    ADD CONSTRAINT notification_data_silent_post_id_fkey FOREIGN KEY (silent_post_id) REFERENCES core.silent_post(id);
+
+
+--
+-- Name: notification_event notification_event_bulk_email_author_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_event
+    ADD CONSTRAINT notification_event_bulk_email_author_id_fkey FOREIGN KEY (bulk_email_author_id) REFERENCES core.user_account(id);
+
+
+--
+-- Name: notification_interaction notification_interaction_receipt_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_interaction
+    ADD CONSTRAINT notification_interaction_receipt_id_fkey FOREIGN KEY (receipt_id) REFERENCES core.notification_receipt(id);
+
+
+--
+-- Name: notification_interaction notification_interaction_reply_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_interaction
+    ADD CONSTRAINT notification_interaction_reply_id_fkey FOREIGN KEY (reply_id) REFERENCES core.comment(id);
+
+
+--
+-- Name: notification_preference notification_preference_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_preference
+    ADD CONSTRAINT notification_preference_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
+
+
+--
+-- Name: notification_push_auth_denial notification_push_auth_denial_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_push_auth_denial
+    ADD CONSTRAINT notification_push_auth_denial_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
+
+
+--
+-- Name: notification_push_device notification_push_device_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_push_device
+    ADD CONSTRAINT notification_push_device_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
+
+
+--
+-- Name: notification_receipt notification_receipt_event_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_receipt
+    ADD CONSTRAINT notification_receipt_event_id_fkey FOREIGN KEY (event_id) REFERENCES core.notification_event(id);
+
+
+--
+-- Name: notification_receipt notification_receipt_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_receipt
+    ADD CONSTRAINT notification_receipt_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
 
 
 --

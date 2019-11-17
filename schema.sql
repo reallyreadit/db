@@ -86,6 +86,15 @@ COMMENT ON EXTENSION plpgsql IS 'PL/pgSQL procedural language';
 
 
 --
+-- Name: article_flair; Type: TYPE; Schema: core; Owner: -
+--
+
+CREATE TYPE core.article_flair AS ENUM (
+    'paywall'
+);
+
+
+--
 -- Name: rating_score; Type: DOMAIN; Schema: core; Owner: -
 --
 
@@ -118,7 +127,12 @@ CREATE TYPE article_api.article AS (
 	date_starred timestamp without time zone,
 	average_rating_score numeric,
 	rating_score core.rating_score,
-	date_posted timestamp without time zone
+	dates_posted timestamp without time zone[],
+	hot_score integer,
+	hot_velocity numeric,
+	rating_count integer,
+	first_poster text,
+	flair core.article_flair
 );
 
 
@@ -147,7 +161,12 @@ CREATE TYPE article_api.article_page_result AS (
 	date_starred timestamp without time zone,
 	average_rating_score numeric,
 	rating_score core.rating_score,
-	date_posted timestamp without time zone,
+	dates_posted timestamp without time zone[],
+	hot_score integer,
+	hot_velocity numeric,
+	rating_count integer,
+	first_poster text,
+	flair core.article_flair,
 	total_count bigint
 );
 
@@ -374,7 +393,7 @@ CREATE TYPE notifications.post_alert_dispatch AS (
 	receipt_id bigint,
 	via_email boolean,
 	via_push boolean,
-	is_replyable boolean,
+	has_recipient_read_article boolean,
 	user_account_id bigint,
 	user_name text,
 	email_address text,
@@ -431,7 +450,12 @@ CREATE TYPE social.article_post_page_result AS (
 	date_starred timestamp without time zone,
 	average_rating_score numeric,
 	rating_score core.rating_score,
-	date_posted timestamp without time zone,
+	dates_posted timestamp without time zone[],
+	hot_score integer,
+	hot_velocity numeric,
+	rating_count integer,
+	first_poster text,
+	flair core.article_flair,
 	post_date_created timestamp without time zone,
 	user_name text,
 	comment_id bigint,
@@ -773,7 +797,10 @@ CREATE TABLE core.article (
     read_count integer DEFAULT 0 NOT NULL,
     average_rating_score numeric,
     word_count integer DEFAULT 0 NOT NULL,
-    silent_post_count integer DEFAULT 0 NOT NULL
+    silent_post_count integer DEFAULT 0 NOT NULL,
+    rating_count integer DEFAULT 0 NOT NULL,
+    first_poster_id bigint,
+    flair core.article_flair
 );
 
 
@@ -845,24 +872,52 @@ CREATE VIEW article_api.user_comment AS
 CREATE FUNCTION article_api.create_comment(text text, article_id bigint, parent_comment_id bigint, user_account_id bigint, analytics text) RETURNS SETOF article_api.user_comment
     LANGUAGE plpgsql
     AS $$
+<<locals>>
 DECLARE
-	comment_id bigint;
+    comment_id bigint;
 BEGIN
-	-- insert the new comment, saving the id
-	INSERT INTO comment
-        (text, article_id, parent_comment_id, user_account_id, analytics)
-	VALUES
-    	(text, article_id, parent_comment_id, user_account_id, analytics::json)
-	RETURNING id INTO comment_id;
-	-- update the cached article comment count
-	UPDATE article
-	SET comment_count = comment_count + 1
-	WHERE id = article_id;
-	-- return the user_comment
-	RETURN QUERY
-	SELECT *
-	FROM article_api.user_comment
-	WHERE id = comment_id;
+    -- create the new comment
+    INSERT INTO
+		comment (
+			text,
+			article_id,
+			parent_comment_id,
+			user_account_id,
+			analytics
+		)
+	VALUES (
+		create_comment.text,
+		create_comment.article_id,
+		create_comment.parent_comment_id,
+		create_comment.user_account_id,
+		create_comment.analytics::json
+	)
+	RETURNING
+		id INTO locals.comment_id;
+    -- update cached article columns
+    UPDATE
+		core.article
+	SET
+		comment_count = comment_count + 1,
+		first_poster_id = (
+			CASE WHEN
+				first_poster_id IS NULL AND create_comment.parent_comment_id IS NULL
+			THEN
+				create_comment.user_account_id
+			ELSE
+				first_poster_id
+			END
+		)
+	WHERE
+		id = create_comment.article_id;
+    -- return the new comment from the view
+    RETURN QUERY
+	SELECT
+	    *
+	FROM
+		article_api.user_comment
+	WHERE
+	    id = locals.comment_id;
 END;
 $$;
 
@@ -1090,14 +1145,14 @@ CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC articl
 		article.id,
 		article.title,
 		article.slug,
-		source.name AS source,
+		source.name,
 		article.date_published,
 		article.section,
 		article.description,
 		article.aotd_timestamp,
-		article_pages.urls[1] AS url,
-		coalesce(article_authors.names, '{}') AS authors,
-		coalesce(article_tags.names, '{}') AS tags,
+		article_pages.urls[1],
+		coalesce(article_authors.names, '{}'),
+		coalesce(article_tags.names, '{}'),
 		article.word_count::bigint,
 		article.comment_count::bigint,
 		article.read_count::bigint,
@@ -1115,8 +1170,13 @@ CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC articl
 		) AS is_read,
 		star.date_starred,
 		article.average_rating_score,
-		user_article_rating.score AS rating_score,
-	    earliest_post.date_created AS date_posted
+		user_article_rating.score,
+	    coalesce(posts.dates, '{}'),
+	    article.hot_score,
+		0.0,
+	    article.rating_count,
+	    first_poster.name,
+	    article.flair
 	FROM
 		article
 		JOIN article_api.article_pages ON (
@@ -1148,15 +1208,18 @@ CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC articl
 		LEFT JOIN (
 			SELECT
 				article_id,
-				min(date_created) AS date_created
+				array_agg(date_created) AS dates
 		    FROM
 		    	social.post
 		    WHERE
 		    	article_id = ANY (get_articles.article_ids) AND
 		        user_account_id = get_articles.user_account_id
-		    GROUP BY
-		    	article_id
-		) AS earliest_post ON earliest_post.article_id = article.id
+			GROUP BY
+				article_id
+		) AS posts
+			ON posts.article_id = article.id
+		LEFT JOIN core.user_account AS first_poster
+			ON first_poster.id = article.first_poster_id
 	ORDER BY
 	    array_position(article_ids, article.id)
 $$;
@@ -1349,30 +1412,52 @@ CREATE TABLE core.rating (
 -- Name: rate_article(bigint, bigint, core.rating_score); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
-CREATE FUNCTION article_api.rate_article(article_id bigint, user_account_id bigint, score core.rating_score) RETURNS core.rating
+CREATE FUNCTION article_api.rate_article(article_id bigint, user_account_id bigint, score core.rating_score) RETURNS SETOF core.rating
     LANGUAGE plpgsql STRICT
     AS $$
 <<locals>>
 DECLARE
-   current_rating rating;
+    new_rating core.rating;
+    average_score numeric;
+    rating_count int;
 BEGIN
-	-- insert the new rating
-	INSERT INTO rating
-		(score, article_id, user_account_id)
-	VALUES
-		(score, article_id, user_account_id)
-	RETURNING *
-	INTO locals.current_rating;
-	-- update the cached article average rating score
-	UPDATE article
-	SET average_rating_score = (
-	   	SELECT avg(user_article_rating.score)
-	   	FROM article_api.user_article_rating
-	   	WHERE user_article_rating.article_id = rate_article.article_id
+    -- insert the new rating
+    INSERT INTO
+		core.rating (
+			score,
+			article_id,
+			user_account_id
+		)
+	VALUES (
+		rate_article.score,
+		rate_article.article_id,
+		rate_article.user_account_id
 	)
-	WHERE id = rate_article.article_id;
-	-- return
-	RETURN locals.current_rating;
+	RETURNING
+		*
+	INTO
+		locals.new_rating;
+    -- select the updated rating stats
+    SELECT
+		avg(current_rating.score),
+        count(*)
+    INTO
+    	locals.average_score,
+        locals.rating_count
+	FROM
+		article_api.user_article_rating AS current_rating
+	WHERE
+		current_rating.article_id = rate_article.article_id;
+    -- cache the updated rating stats in article
+    UPDATE
+		core.article
+	SET
+		average_rating_score = locals.average_score,
+		rating_count = locals.rating_count
+	WHERE
+		article.id = rate_article.article_id;
+    -- return the new rating
+    RETURN NEXT locals.new_rating;
 END;
 $$;
 
@@ -1653,6 +1738,61 @@ $$;
 
 
 --
+-- Name: get_aotd_history(bigint, integer, integer, integer, integer); Type: FUNCTION; Schema: community_reads; Owner: -
+--
+
+CREATE FUNCTION community_reads.get_aotd_history(user_account_id bigint, page_number integer, page_size integer, min_length integer, max_length integer) RETURNS SETOF article_api.article_page_result
+    LANGUAGE sql STABLE
+    AS $$
+    WITH previous_aotd AS (
+        SELECT
+            id,
+            aotd_timestamp
+        FROM
+        	core.article
+        WHERE (
+        	aotd_timestamp IS NOT NULL AND
+        	aotd_timestamp IS DISTINCT FROM (
+        	    SELECT
+        	    	max(aotd_timestamp)
+        	    FROM
+        	    	core.article
+			) AND
+			core.matches_article_length(
+				word_count,
+			    min_length,
+			    max_length
+			)
+		)
+	)
+    SELECT
+    	articles.*,
+		(
+		    SELECT
+		        count(*)
+		    FROM
+		        previous_aotd
+		)
+    FROM
+		article_api.get_articles(
+			user_account_id,
+			VARIADIC ARRAY(
+				SELECT
+					id
+				FROM
+					previous_aotd
+				ORDER BY
+					aotd_timestamp DESC
+				OFFSET
+					(page_number - 1) * page_size
+				LIMIT
+					page_size
+			)
+		) AS articles;
+$$;
+
+
+--
 -- Name: get_aotds(bigint, integer); Type: FUNCTION; Schema: community_reads; Owner: -
 --
 
@@ -1740,9 +1880,10 @@ CREATE FUNCTION community_reads.get_hot(user_account_id bigint, page_number inte
         SELECT
             id,
             hot_score
-        FROM community_reads.community_read
+        FROM
+        	community_reads.community_read
         WHERE (
-        	aotd_timestamp IS DISTINCT FROM (SELECT max(aotd_timestamp) FROM core.article) AND
+        	aotd_timestamp IS NULL AND
 			hot_score > 0 AND
 			core.matches_article_length(
 				word_count,
@@ -1754,19 +1895,27 @@ CREATE FUNCTION community_reads.get_hot(user_account_id bigint, page_number inte
     SELECT
     	articles.*,
 		(
-		    SELECT count(*)
-		    FROM hot_read
+		    SELECT
+		        count(*)
+		    FROM
+		        hot_read
 		) AS total_count
-    FROM article_api.get_articles(
-        user_account_id,
-		VARIADIC ARRAY(
-			SELECT id
-			FROM hot_read
-			ORDER BY hot_score DESC
-			OFFSET (page_number - 1) * page_size
-			LIMIT page_size
-		)
-	) AS articles;
+    FROM
+		article_api.get_articles(
+			user_account_id,
+			VARIADIC ARRAY(
+				SELECT
+					id
+				FROM
+					hot_read
+				ORDER BY
+					hot_score DESC
+				OFFSET
+					(page_number - 1) * page_size
+				LIMIT
+					page_size
+			)
+		) AS articles;
 $$;
 
 
@@ -1943,8 +2092,7 @@ CREATE FUNCTION community_reads.set_aotd() RETURNS SETOF article_api.article
 				FROM
 					community_reads.community_read
 				WHERE
-					aotd_timestamp IS NULL AND
-					core.matches_article_length(word_count, 5, NULL)
+					aotd_timestamp IS NULL
 				ORDER BY
 					hot_score DESC
 				LIMIT
@@ -3330,7 +3478,7 @@ CREATE FUNCTION notifications.create_post_notifications(article_id bigint, poste
 		receipt.id,
 		receipt.via_email,
 		receipt.via_push,
-	    user_article.date_completed IS NOT NULL AS is_replyable,
+	    user_article.date_completed IS NOT NULL,
 		user_account.id,
 		user_account.name::text,
 		user_account.email::text,
@@ -4166,32 +4314,38 @@ CREATE TABLE core.silent_post (
 --
 
 CREATE FUNCTION social.create_silent_post(user_account_id bigint, article_id bigint, analytics text) RETURNS SETOF core.silent_post
-    LANGUAGE plpgsql
+    LANGUAGE sql
     AS $$
-BEGIN
-    -- update the cached article silent_post count
-	UPDATE
-	    article
-	SET
-	    silent_post_count = silent_post_count + 1
-	WHERE
-		id = create_silent_post.article_id;
-    -- insert the new silent post
-    RETURN QUERY
-	INSERT INTO core.silent_post
-    	(
+    WITH cache_post AS (
+        UPDATE
+			core.article
+		SET
+			silent_post_count = silent_post_count + 1,
+		    first_poster_id = (
+		        CASE WHEN
+		            first_poster_id IS NULL
+		        THEN
+		            create_silent_post.user_account_id
+		        ELSE
+		            first_poster_id
+		        END
+			)
+		WHERE
+			id = create_silent_post.article_id
+	)
+    INSERT INTO
+        core.silent_post (
     		article_id,
     	 	user_account_id,
     	 	analytics
     	)
-    VALUES
-    	(
-    	 	create_silent_post.article_id,
-    	 	create_silent_post.user_account_id,
-    	 	create_silent_post.analytics::jsonb
-		)
-	RETURNING *;
-END;
+    VALUES (
+		create_silent_post.article_id,
+		create_silent_post.user_account_id,
+		create_silent_post.analytics::jsonb
+	)
+	RETURNING
+	    *
 $$;
 
 

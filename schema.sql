@@ -172,25 +172,6 @@ CREATE TYPE article_api.article_page_result AS (
 
 
 --
--- Name: user_comment_page_result; Type: TYPE; Schema: article_api; Owner: -
---
-
-CREATE TYPE article_api.user_comment_page_result AS (
-	id bigint,
-	date_created timestamp without time zone,
-	text text,
-	article_id bigint,
-	article_title text,
-	article_slug text,
-	user_account_id bigint,
-	user_account text,
-	parent_comment_id bigint,
-	date_read timestamp without time zone,
-	total_count bigint
-);
-
-
---
 -- Name: challenge_response_action; Type: TYPE; Schema: core; Owner: -
 --
 
@@ -341,6 +322,16 @@ CREATE TYPE notifications.alert_dispatch AS (
 
 
 --
+-- Name: comment_addendum; Type: TYPE; Schema: social; Owner: -
+--
+
+CREATE TYPE social.comment_addendum AS (
+	date_created timestamp without time zone,
+	text_content text
+);
+
+
+--
 -- Name: comment_digest_dispatch; Type: TYPE; Schema: notifications; Owner: -
 --
 
@@ -352,6 +343,7 @@ CREATE TYPE notifications.comment_digest_dispatch AS (
 	comment_id bigint,
 	comment_date_created timestamp without time zone,
 	comment_text text,
+	comment_addenda social.comment_addendum[],
 	comment_author text,
 	comment_article_id bigint,
 	comment_article_title text
@@ -419,6 +411,7 @@ CREATE TYPE notifications.post_digest_dispatch AS (
 	post_silent_post_id bigint,
 	post_date_created timestamp without time zone,
 	post_comment_text text,
+	post_comment_addenda social.comment_addendum[],
 	post_author text,
 	post_article_id bigint,
 	post_article_title text
@@ -460,7 +453,9 @@ CREATE TYPE social.article_post_page_result AS (
 	user_name text,
 	comment_id bigint,
 	comment_text text,
+	comment_addenda social.comment_addendum[],
 	silent_post_id bigint,
+	date_deleted timestamp without time zone,
 	has_alert boolean,
 	total_count bigint
 );
@@ -764,163 +759,7 @@ END;
 $$;
 
 
---
--- Name: utc_now(); Type: FUNCTION; Schema: core; Owner: -
---
-
-CREATE FUNCTION core.utc_now() RETURNS timestamp without time zone
-    LANGUAGE sql STABLE
-    AS $$
-	SELECT local_now('UTC');
-$$;
-
-
 SET default_with_oids = false;
-
---
--- Name: article; Type: TABLE; Schema: core; Owner: -
---
-
-CREATE TABLE core.article (
-    id bigint NOT NULL,
-    title character varying(512) NOT NULL,
-    slug character varying(256) NOT NULL,
-    source_id bigint NOT NULL,
-    date_published timestamp without time zone,
-    date_modified timestamp without time zone,
-    section character varying(256),
-    description text,
-    aotd_timestamp timestamp without time zone,
-    hot_score integer DEFAULT 0 NOT NULL,
-    top_score integer DEFAULT 0 NOT NULL,
-    comment_count integer DEFAULT 0 NOT NULL,
-    read_count integer DEFAULT 0 NOT NULL,
-    average_rating_score numeric,
-    word_count integer DEFAULT 0 NOT NULL,
-    silent_post_count integer DEFAULT 0 NOT NULL,
-    rating_count integer DEFAULT 0 NOT NULL,
-    first_poster_id bigint,
-    flair core.article_flair
-);
-
-
---
--- Name: comment; Type: TABLE; Schema: core; Owner: -
---
-
-CREATE TABLE core.comment (
-    id bigint NOT NULL,
-    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
-    text text NOT NULL,
-    article_id bigint NOT NULL,
-    user_account_id bigint NOT NULL,
-    parent_comment_id bigint,
-    date_read timestamp without time zone,
-    analytics jsonb
-);
-
-
---
--- Name: user_account; Type: TABLE; Schema: core; Owner: -
---
-
-CREATE TABLE core.user_account (
-    id bigint NOT NULL,
-    name character varying(30) NOT NULL,
-    email character varying(256) NOT NULL,
-    password_hash bytea NOT NULL,
-    password_salt bytea NOT NULL,
-    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
-    role core.user_account_role DEFAULT 'regular'::core.user_account_role NOT NULL,
-    time_zone_id bigint,
-    creation_analytics jsonb,
-    is_email_confirmed boolean DEFAULT false NOT NULL,
-    aotd_alert boolean DEFAULT false NOT NULL,
-    reply_alert_count integer DEFAULT 0 NOT NULL,
-    loopback_alert_count integer DEFAULT 0 NOT NULL,
-    post_alert_count integer DEFAULT 0 NOT NULL,
-    follower_alert_count integer DEFAULT 0 NOT NULL,
-    CONSTRAINT user_account_email_valid CHECK (((email)::text ~~ '%@%'::text)),
-    CONSTRAINT user_account_name_valid CHECK (((name)::text ~ similar_escape('[A-Za-z0-9\-_]+'::text, NULL::text)))
-);
-
-
---
--- Name: user_comment; Type: VIEW; Schema: article_api; Owner: -
---
-
-CREATE VIEW article_api.user_comment AS
- SELECT comment.id,
-    comment.date_created,
-    comment.text,
-    comment.article_id,
-    article.title AS article_title,
-    article.slug AS article_slug,
-    comment.user_account_id,
-    user_account.name AS user_account,
-    comment.parent_comment_id,
-    comment.date_read
-   FROM ((core.comment
-     JOIN core.article ON ((comment.article_id = article.id)))
-     JOIN core.user_account ON ((comment.user_account_id = user_account.id)));
-
-
---
--- Name: create_comment(text, bigint, bigint, bigint, text); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.create_comment(text text, article_id bigint, parent_comment_id bigint, user_account_id bigint, analytics text) RETURNS SETOF article_api.user_comment
-    LANGUAGE plpgsql
-    AS $$
-<<locals>>
-DECLARE
-    comment_id bigint;
-BEGIN
-    -- create the new comment
-    INSERT INTO
-		comment (
-			text,
-			article_id,
-			parent_comment_id,
-			user_account_id,
-			analytics
-		)
-	VALUES (
-		create_comment.text,
-		create_comment.article_id,
-		create_comment.parent_comment_id,
-		create_comment.user_account_id,
-		create_comment.analytics::json
-	)
-	RETURNING
-		id INTO locals.comment_id;
-    -- update cached article columns
-    UPDATE
-		core.article
-	SET
-		comment_count = comment_count + 1,
-		first_poster_id = (
-			CASE WHEN
-				first_poster_id IS NULL AND create_comment.parent_comment_id IS NULL
-			THEN
-				create_comment.user_account_id
-			ELSE
-				first_poster_id
-			END
-		)
-	WHERE
-		id = create_comment.article_id;
-    -- return the new comment from the view
-    RETURN QUERY
-	SELECT
-	    *
-	FROM
-		article_api.user_comment
-	WHERE
-	    id = locals.comment_id;
-END;
-$$;
-
 
 --
 -- Name: page; Type: TABLE; Schema: core; Owner: -
@@ -979,6 +818,17 @@ CREATE FUNCTION article_api.create_source(name text, url text, hostname text, sl
     LANGUAGE sql
     AS $$
 	INSERT INTO source (name, url, hostname, slug) VALUES (name, url, hostname, slug) RETURNING *;
+$$;
+
+
+--
+-- Name: utc_now(); Type: FUNCTION; Schema: core; Owner: -
+--
+
+CREATE FUNCTION core.utc_now() RETURNS timestamp without time zone
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT local_now('UTC');
 $$;
 
 
@@ -1226,17 +1076,6 @@ $$;
 
 
 --
--- Name: get_comment(bigint); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.get_comment(comment_id bigint) RETURNS SETOF article_api.user_comment
-    LANGUAGE sql
-    AS $$
-	SELECT * FROM article_api.user_comment WHERE id = comment_id;
-$$;
-
-
---
 -- Name: get_page(bigint); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
@@ -1356,46 +1195,6 @@ $$;
 
 
 --
--- Name: list_comments(bigint); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.list_comments(article_id bigint) RETURNS SETOF article_api.user_comment
-    LANGUAGE sql
-    AS $$
-	SELECT * FROM article_api.user_comment WHERE article_id = list_comments.article_id;
-$$;
-
-
---
--- Name: list_replies(bigint, integer, integer); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.list_replies(user_account_id bigint, page_number integer, page_size integer) RETURNS SETOF article_api.user_comment_page_result
-    LANGUAGE sql
-    AS $$
-	SELECT
-		reply.id,
-		reply.date_created,
-		reply.text,
-		reply.article_id,
-		reply.article_title,
-		reply.article_slug,
-		reply.user_account_id,
-		reply.user_account,
-		reply.parent_comment_id,
-		reply.date_read,
-		count(*) OVER() AS total_count
-	FROM
-		article_api.user_comment AS reply
-		JOIN comment AS parent ON reply.parent_comment_id = parent.id
-	WHERE parent.user_account_id = list_replies.user_account_id
-	ORDER BY reply.date_created DESC
-	OFFSET (page_number - 1) * page_size
-	LIMIT page_size;
-$$;
-
-
---
 -- Name: rating; Type: TABLE; Schema: core; Owner: -
 --
 
@@ -1459,17 +1258,6 @@ BEGIN
     -- return the new rating
     RETURN NEXT locals.new_rating;
 END;
-$$;
-
-
---
--- Name: read_comment(bigint); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.read_comment(comment_id bigint) RETURNS void
-    LANGUAGE sql
-    AS $$
-	UPDATE comment SET date_read = utc_now() WHERE id = comment_id AND date_read IS NULL;
 $$;
 
 
@@ -3010,6 +2798,7 @@ CREATE FUNCTION notifications.create_loopback_digest_notifications(frequency tex
 	        loopback.id AS comment_id,
 	        loopback.date_created AS date_created,
 	        loopback.text AS comment_text,
+    	    loopback.addenda AS comment_addenda,
 	        loopback_author.name AS author,
     	    article.id AS article_id,
     	    article.title AS article_title
@@ -3027,7 +2816,7 @@ CREATE FUNCTION notifications.create_loopback_digest_notifications(frequency tex
 			    )
 			JOIN core.article
 			    ON article.id = user_article.article_id
-			JOIN core.comment AS loopback
+			JOIN social.comment AS loopback
 			    ON (
 					loopback.article_id = article.id AND
 					loopback.user_account_id != recipient.id AND
@@ -3037,7 +2826,8 @@ CREATE FUNCTION notifications.create_loopback_digest_notifications(frequency tex
 							WHEN 'daily' THEN core.utc_now() - '1 day'::interval
 							WHEN 'weekly' THEN core.utc_now() - '1 week'::interval
 						END
-					)
+					) AND
+					loopback.date_deleted IS NULL
 				)
 			JOIN core.user_account AS loopback_author
 			    ON loopback_author.id = loopback.user_account_id
@@ -3132,6 +2922,7 @@ CREATE FUNCTION notifications.create_loopback_digest_notifications(frequency tex
         loopback.comment_id,
 		loopback.date_created,
 		loopback.comment_text,
+        loopback.comment_addenda,
 		loopback.author,
         loopback.article_id,
         loopback.article_title
@@ -3273,6 +3064,7 @@ CREATE FUNCTION notifications.create_post_digest_notifications(frequency text) R
     	    post.silent_post_id AS silent_post_id,
 	        post.date_created AS date_created,
 	        post.comment_text AS comment_text,
+    	    post.comment_addenda AS comment_addenda,
 	        post_author.name AS author,
     	    article.id AS article_id,
     	    article.title AS article_title
@@ -3295,7 +3087,8 @@ CREATE FUNCTION notifications.create_post_digest_notifications(frequency text) R
 					WHEN 'daily' THEN core.utc_now() - '1 day'::interval
 					WHEN 'weekly' THEN core.utc_now() - '1 week'::interval
 				END
-		    )
+		    ) AND
+		    post.date_deleted IS NULL
 	),
     recipient AS (
       	SELECT
@@ -3383,6 +3176,7 @@ CREATE FUNCTION notifications.create_post_digest_notifications(frequency text) R
         post.silent_post_id,
 		post.date_created,
 		post.comment_text,
+        post.comment_addenda,
 		post.author,
         post.article_id,
         post.article_title
@@ -3560,6 +3354,7 @@ CREATE FUNCTION notifications.create_reply_digest_notifications(frequency text) 
 	        reply.id AS comment_id,
 	        reply.date_created AS comment_date_created,
 	        reply.text AS comment_text,
+    	    reply.addenda AS comment_addenda,
 	        reply_author.name AS comment_author_name,
     	    article.id AS comment_article_id,
     	    article.title AS comment_article_title
@@ -3569,14 +3364,17 @@ CREATE FUNCTION notifications.create_reply_digest_notifications(frequency text) 
 			    ON recipient.id = preference.user_account_id
 			JOIN core.comment
 			    ON comment.user_account_id = preference.user_account_id
-	    	JOIN core.comment AS reply
+	    	JOIN social.comment AS reply
 	    		ON (
 	    		    reply.parent_comment_id = comment.id AND
 	    		    reply.user_account_id != preference.user_account_id AND
-	    		    reply.date_created >= CASE create_reply_digest_notifications.frequency
-						WHEN 'daily' THEN core.utc_now() - '1 day'::interval
-						WHEN 'weekly' THEN core.utc_now() - '1 week'::interval
-					END
+	    		    reply.date_created >= (
+	    		        CASE create_reply_digest_notifications.frequency
+							WHEN 'daily' THEN core.utc_now() - '1 day'::interval
+							WHEN 'weekly' THEN core.utc_now() - '1 week'::interval
+						END
+	    		    ) AND
+	    		    reply.date_deleted IS NULL
 	    		)
 			JOIN core.article
 			    ON article.id = reply.article_id
@@ -3668,6 +3466,7 @@ CREATE FUNCTION notifications.create_reply_digest_notifications(frequency text) 
         reply.comment_id,
 		reply.comment_date_created,
 		reply.comment_text,
+        reply.comment_addenda,
 		reply.comment_author_name,
         reply.comment_article_id,
         reply.comment_article_title
@@ -4258,6 +4057,112 @@ $$;
 
 
 --
+-- Name: comment; Type: VIEW; Schema: social; Owner: -
+--
+
+CREATE VIEW social.comment AS
+SELECT
+    NULL::bigint AS id,
+    NULL::timestamp without time zone AS date_created,
+    NULL::text AS text,
+    NULL::bigint AS article_id,
+    NULL::character varying(512) AS article_title,
+    NULL::character varying(256) AS article_slug,
+    NULL::bigint AS user_account_id,
+    NULL::character varying(30) AS user_account,
+    NULL::bigint AS parent_comment_id,
+    NULL::social.comment_addendum[] AS addenda,
+    NULL::timestamp without time zone AS date_deleted;
+
+
+--
+-- Name: create_comment(text, bigint, bigint, bigint, text); Type: FUNCTION; Schema: social; Owner: -
+--
+
+CREATE FUNCTION social.create_comment(text text, article_id bigint, parent_comment_id bigint, user_account_id bigint, analytics text) RETURNS SETOF social.comment
+    LANGUAGE plpgsql
+    AS $$
+<<locals>>
+DECLARE
+    comment_id bigint;
+BEGIN
+    -- create the new comment
+    INSERT INTO
+		core.comment (
+			text,
+			article_id,
+			parent_comment_id,
+			user_account_id,
+			analytics
+		)
+	VALUES (
+		create_comment.text,
+		create_comment.article_id,
+		create_comment.parent_comment_id,
+		create_comment.user_account_id,
+		create_comment.analytics::json
+	)
+	RETURNING
+		id INTO locals.comment_id;
+    -- update cached article columns
+    UPDATE
+		core.article
+	SET
+		comment_count = comment_count + 1,
+		first_poster_id = (
+			CASE WHEN
+				first_poster_id IS NULL AND create_comment.parent_comment_id IS NULL
+			THEN
+				create_comment.user_account_id
+			ELSE
+				first_poster_id
+			END
+		)
+	WHERE
+		id = create_comment.article_id;
+    -- return the new comment from the view
+    RETURN QUERY
+	SELECT
+	    *
+	FROM
+		social.comment
+	WHERE
+	    id = locals.comment_id;
+END;
+$$;
+
+
+--
+-- Name: create_comment_addendum(bigint, text); Type: FUNCTION; Schema: social; Owner: -
+--
+
+CREATE FUNCTION social.create_comment_addendum(comment_id bigint, text_content text) RETURNS SETOF social.comment
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+	-- create the addendum
+	INSERT INTO
+        core.comment_addendum (
+        	comment_id,
+        	text_content
+        )
+    VALUES (
+    	create_comment_addendum.comment_id,
+        create_comment_addendum.text_content
+    );
+	-- return from the view
+	RETURN QUERY
+    SELECT
+    	*
+    FROM
+    	social.comment
+    WHERE
+    	id = create_comment_addendum.comment_id;
+END;
+$$;
+
+
+--
 -- Name: following; Type: TABLE; Schema: core; Owner: -
 --
 
@@ -4346,6 +4251,65 @@ CREATE FUNCTION social.create_silent_post(user_account_id bigint, article_id big
 	)
 	RETURNING
 	    *
+$$;
+
+
+--
+-- Name: delete_comment(bigint); Type: FUNCTION; Schema: social; Owner: -
+--
+
+CREATE FUNCTION social.delete_comment(comment_id bigint) RETURNS SETOF social.comment
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+	-- mark the comment as deleted
+	UPDATE
+	    core.comment
+	SET
+		date_deleted = core.utc_now()
+	WHERE
+		comment.id = delete_comment.comment_id;
+	-- return from the view
+	RETURN QUERY
+    SELECT
+    	*
+    FROM
+    	social.comment
+    WHERE
+    	id = delete_comment.comment_id;
+END;
+$$;
+
+
+--
+-- Name: get_comment(bigint); Type: FUNCTION; Schema: social; Owner: -
+--
+
+CREATE FUNCTION social.get_comment(comment_id bigint) RETURNS SETOF social.comment
+    LANGUAGE sql
+    AS $$
+	SELECT
+	    *
+	FROM
+	    social.comment
+	WHERE
+	    id = get_comment.comment_id;
+$$;
+
+
+--
+-- Name: get_comments(bigint); Type: FUNCTION; Schema: social; Owner: -
+--
+
+CREATE FUNCTION social.get_comments(article_id bigint) RETURNS SETOF social.comment
+    LANGUAGE sql
+    AS $$
+	SELECT
+	    *
+	FROM
+	    social.comment
+	WHERE
+	    article_id = get_comments.article_id;
 $$;
 
 
@@ -4441,12 +4405,15 @@ CREATE FUNCTION social.get_posts_from_followees(user_id bigint, page_number inte
 	        post.date_created,
 	        post.comment_id,
 	        post.comment_text,
-	        post.silent_post_id
+	        post.comment_addenda,
+	        post.silent_post_id,
+	        post.date_deleted
 	    FROM
 	    	social.post
 	    	JOIN core.article ON article.id = post.article_id
 	    	JOIN social.active_following ON active_following.followee_user_account_id = post.user_account_id
 	    WHERE
+	        post.date_deleted IS NULL AND
 	    	active_following.follower_user_account_id = get_posts_from_followees.user_id AND
 	        core.matches_article_length(
 				article.word_count,
@@ -4468,11 +4435,13 @@ CREATE FUNCTION social.get_posts_from_followees(user_id bigint, page_number inte
 	)
     SELECT
 		article.*,
-		paginated_post.date_created AS post_date_created,
-		user_account.name AS user_name,
+		paginated_post.date_created,
+		user_account.name,
 		paginated_post.comment_id,
 		paginated_post.comment_text,
+        paginated_post.comment_addenda,
         paginated_post.silent_post_id,
+        paginated_post.date_deleted,
 		(
 			alert.comment_id IS NOT NULL OR
 			alert.silent_post_id IS NOT NULL
@@ -4542,30 +4511,36 @@ CREATE FUNCTION social.get_posts_from_inbox(user_id bigint, page_number integer,
 	    	reply.id,
 	        reply.date_created,
 	        reply.text,
+	        reply.addenda,
 	        reply.article_id,
-	        reply.user_account_id
+	        reply.user_account_id,
+	        reply.date_deleted
 	    FROM
 	    	core.comment
-	    	JOIN core.comment AS reply ON reply.parent_comment_id = comment.id
+	    	JOIN social.comment AS reply ON reply.parent_comment_id = comment.id
 	    WHERE
 	    	comment.user_account_id = get_posts_from_inbox.user_id AND
-	        reply.user_account_id != get_posts_from_inbox.user_id
+	        reply.user_account_id != get_posts_from_inbox.user_id AND
+	        reply.date_deleted IS NULL
 	    UNION ALL
 	    SELECT
 	    	comment.id,
 	        comment.date_created,
 	        comment.text,
+	        comment.addenda,
 	        comment.article_id,
-	        comment.user_account_id
+	        comment.user_account_id,
+	        comment.date_deleted
 	    FROM
 	    	core.user_article
-	    	JOIN core.comment ON comment.article_id = user_article.article_id
+	    	JOIN social.comment ON comment.article_id = user_article.article_id
 	    WHERE
 	    	user_article.user_account_id = get_posts_from_inbox.user_id AND
 	    	user_article.date_completed IS NOT NULL AND
 	        comment.user_account_id != get_posts_from_inbox.user_id AND
 	        comment.parent_comment_id IS NULL AND
-	        comment.date_created > user_article.date_completed
+	        comment.date_created > user_article.date_completed AND
+	        comment.date_deleted IS NULL
 	),
 	paginated_inbox_comment AS (
 	    SELECT
@@ -4581,12 +4556,14 @@ CREATE FUNCTION social.get_posts_from_inbox(user_id bigint, page_number integer,
 	)
     SELECT
 		article.*,
-		paginated_inbox_comment.date_created AS post_date_created,
-		user_account.name AS user_name,
-		paginated_inbox_comment.id AS comment_id,
-		paginated_inbox_comment.text AS comment_text,
-        NULL::bigint AS silent_post_id,
-        alert.comment_id IS NOT NULL AS has_alert,
+		paginated_inbox_comment.date_created,
+		user_account.name,
+		paginated_inbox_comment.id,
+		paginated_inbox_comment.text,
+        paginated_inbox_comment.addenda,
+        NULL::bigint,
+        paginated_inbox_comment.date_deleted,
+        alert.comment_id IS NOT NULL,
 		(
 		    SELECT
 		    	count(*)
@@ -4651,18 +4628,21 @@ CREATE FUNCTION social.get_posts_from_user(viewer_user_id bigint, subject_user_n
 	        post.date_created,
 	        post.comment_id,
 	        post.comment_text,
-	        post.silent_post_id
+	        post.comment_addenda,
+	        post.silent_post_id,
+	        post.date_deleted
 	    FROM
 	    	social.post
 	    WHERE
-	    	user_account_id = (
+	    	post.user_account_id = (
 	    		SELECT
 	    		    id
 	    		FROM
 	    			subject_user_account
-	    	)
+	    	) AND
+	        post.date_deleted IS NULL
 	    ORDER BY
-			date_created DESC
+			post.date_created DESC
 		OFFSET
 			(get_posts_from_user.page_number - 1) * get_posts_from_user.page_size
 		LIMIT
@@ -4670,7 +4650,7 @@ CREATE FUNCTION social.get_posts_from_user(viewer_user_id bigint, subject_user_n
 	)
     SELECT
 		article.*,
-		user_post.date_created AS post_date_created,
+		user_post.date_created,
 		(
 		    SELECT
 		    	name
@@ -4684,9 +4664,11 @@ CREATE FUNCTION social.get_posts_from_user(viewer_user_id bigint, subject_user_n
 		    		    subject_user_account
 		    	)
 		) AS user_name,
-		user_post.comment_id AS comment_id,
-		user_post.comment_text AS comment_text,
+		user_post.comment_id,
+		user_post.comment_text,
+        user_post.comment_addenda,
         user_post.silent_post_id,
+        user_post.date_deleted,
         FALSE AS has_alert,
 		(
 		    SELECT
@@ -4768,6 +4750,47 @@ CREATE FUNCTION social.get_silent_post(id bigint) RETURNS SETOF core.silent_post
     	core.silent_post
 	WHERE
     	id = get_silent_post.id;
+$$;
+
+
+--
+-- Name: revise_comment(bigint, text); Type: FUNCTION; Schema: social; Owner: -
+--
+
+CREATE FUNCTION social.revise_comment(comment_id bigint, revised_text text) RETURNS SETOF social.comment
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+	-- create the revision
+    INSERT INTO
+        core.comment_revision (
+            comment_id,
+            original_text_content
+        )
+    SELECT
+    	comment.id,
+        comment.text
+    FROM
+        core.comment
+    WHERE
+    	comment.id = revise_comment.comment_id
+    FOR UPDATE;
+    -- update the comment
+	UPDATE
+	    core.comment
+	SET
+		text = revise_comment.revised_text
+	WHERE
+		comment.id = revise_comment.comment_id;
+    -- return from the view
+    RETURN QUERY
+    SELECT
+    	*
+    FROM
+    	social.comment
+    WHERE
+    	id = revise_comment.comment_id;
+END;
 $$;
 
 
@@ -5621,6 +5644,31 @@ $$;
 
 
 --
+-- Name: user_account; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.user_account (
+    id bigint NOT NULL,
+    name character varying(30) NOT NULL,
+    email character varying(256) NOT NULL,
+    password_hash bytea NOT NULL,
+    password_salt bytea NOT NULL,
+    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    role core.user_account_role DEFAULT 'regular'::core.user_account_role NOT NULL,
+    time_zone_id bigint,
+    creation_analytics jsonb,
+    is_email_confirmed boolean DEFAULT false NOT NULL,
+    aotd_alert boolean DEFAULT false NOT NULL,
+    reply_alert_count integer DEFAULT 0 NOT NULL,
+    loopback_alert_count integer DEFAULT 0 NOT NULL,
+    post_alert_count integer DEFAULT 0 NOT NULL,
+    follower_alert_count integer DEFAULT 0 NOT NULL,
+    CONSTRAINT user_account_email_valid CHECK (((email)::text ~~ '%@%'::text)),
+    CONSTRAINT user_account_name_valid CHECK (((name)::text ~ similar_escape('[A-Za-z0-9\-_]+'::text, NULL::text)))
+);
+
+
+--
 -- Name: create_user_account(text, text, bytea, bytea, bigint, text); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
@@ -5935,6 +5983,33 @@ CREATE VIEW article_api.user_article_rating AS
 
 
 --
+-- Name: article; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.article (
+    id bigint NOT NULL,
+    title character varying(512) NOT NULL,
+    slug character varying(256) NOT NULL,
+    source_id bigint NOT NULL,
+    date_published timestamp without time zone,
+    date_modified timestamp without time zone,
+    section character varying(256),
+    description text,
+    aotd_timestamp timestamp without time zone,
+    hot_score integer DEFAULT 0 NOT NULL,
+    top_score integer DEFAULT 0 NOT NULL,
+    comment_count integer DEFAULT 0 NOT NULL,
+    read_count integer DEFAULT 0 NOT NULL,
+    average_rating_score numeric,
+    word_count integer DEFAULT 0 NOT NULL,
+    silent_post_count integer DEFAULT 0 NOT NULL,
+    rating_count integer DEFAULT 0 NOT NULL,
+    first_poster_id bigint,
+    flair core.article_flair
+);
+
+
+--
 -- Name: community_read; Type: VIEW; Schema: community_reads; Owner: -
 --
 
@@ -6155,6 +6230,53 @@ ALTER SEQUENCE core.client_error_report_id_seq OWNED BY core.client_error_report
 
 
 --
+-- Name: comment; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.comment (
+    id bigint NOT NULL,
+    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    text text NOT NULL,
+    article_id bigint NOT NULL,
+    user_account_id bigint NOT NULL,
+    parent_comment_id bigint,
+    analytics jsonb,
+    date_deleted timestamp without time zone
+);
+
+
+--
+-- Name: comment_addendum; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.comment_addendum (
+    id bigint NOT NULL,
+    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    comment_id bigint NOT NULL,
+    text_content text
+);
+
+
+--
+-- Name: comment_addendum_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.comment_addendum_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: comment_addendum_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.comment_addendum_id_seq OWNED BY core.comment_addendum.id;
+
+
+--
 -- Name: comment_id_seq; Type: SEQUENCE; Schema: core; Owner: -
 --
 
@@ -6171,6 +6293,37 @@ CREATE SEQUENCE core.comment_id_seq
 --
 
 ALTER SEQUENCE core.comment_id_seq OWNED BY core.comment.id;
+
+
+--
+-- Name: comment_revision; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.comment_revision (
+    id bigint NOT NULL,
+    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    comment_id bigint NOT NULL,
+    original_text_content text
+);
+
+
+--
+-- Name: comment_revision_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.comment_revision_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: comment_revision_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.comment_revision_id_seq OWNED BY core.comment_revision.id;
 
 
 --
@@ -6824,8 +6977,10 @@ CREATE VIEW social.post AS
     comment.date_created,
     comment.id AS comment_id,
     comment.text AS comment_text,
-    NULL::bigint AS silent_post_id
-   FROM core.comment
+    comment.addenda AS comment_addenda,
+    NULL::bigint AS silent_post_id,
+    comment.date_deleted
+   FROM social.comment
   WHERE (comment.parent_comment_id IS NULL)
 UNION ALL
  SELECT silent_post.article_id,
@@ -6833,7 +6988,9 @@ UNION ALL
     silent_post.date_created,
     NULL::bigint AS comment_id,
     NULL::text AS comment_text,
-    silent_post.id AS silent_post_id
+    NULL::social.comment_addendum[] AS comment_addenda,
+    silent_post.id AS silent_post_id,
+    NULL::timestamp without time zone AS date_deleted
    FROM core.silent_post;
 
 
@@ -6937,6 +7094,20 @@ ALTER TABLE ONLY core.client_error_report ALTER COLUMN id SET DEFAULT nextval('c
 --
 
 ALTER TABLE ONLY core.comment ALTER COLUMN id SET DEFAULT nextval('core.comment_id_seq'::regclass);
+
+
+--
+-- Name: comment_addendum id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.comment_addendum ALTER COLUMN id SET DEFAULT nextval('core.comment_addendum_id_seq'::regclass);
+
+
+--
+-- Name: comment_revision id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.comment_revision ALTER COLUMN id SET DEFAULT nextval('core.comment_revision_id_seq'::regclass);
 
 
 --
@@ -7188,11 +7359,27 @@ ALTER TABLE ONLY core.client_error_report
 
 
 --
+-- Name: comment_addendum comment_addendum_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.comment_addendum
+    ADD CONSTRAINT comment_addendum_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: comment comment_pkey; Type: CONSTRAINT; Schema: core; Owner: -
 --
 
 ALTER TABLE ONLY core.comment
     ADD CONSTRAINT comment_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: comment_revision comment_revision_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.comment_revision
+    ADD CONSTRAINT comment_revision_pkey PRIMARY KEY (id);
 
 
 --
@@ -7639,6 +7826,29 @@ CREATE OR REPLACE VIEW notifications.notification AS
 
 
 --
+-- Name: comment _RETURN; Type: RULE; Schema: social; Owner: -
+--
+
+CREATE OR REPLACE VIEW social.comment AS
+ SELECT comment.id,
+    comment.date_created,
+    comment.text,
+    comment.article_id,
+    article.title AS article_title,
+    article.slug AS article_slug,
+    comment.user_account_id,
+    user_account.name AS user_account,
+    comment.parent_comment_id,
+    COALESCE(array_agg(ROW(addendum.date_created, addendum.text_content)::social.comment_addendum) FILTER (WHERE (addendum.id IS NOT NULL)), '{}'::social.comment_addendum[]) AS addenda,
+    comment.date_deleted
+   FROM (((core.comment
+     JOIN core.article ON ((article.id = comment.article_id)))
+     JOIN core.user_account ON ((user_account.id = comment.user_account_id)))
+     LEFT JOIN core.comment_addendum addendum ON ((addendum.comment_id = comment.id)))
+  GROUP BY comment.id, article.id, user_account.id;
+
+
+--
 -- Name: article_author article_author_article_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
 --
 
@@ -7719,6 +7929,14 @@ ALTER TABLE ONLY core.challenge_response
 
 
 --
+-- Name: comment_addendum comment_addendum_comment_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.comment_addendum
+    ADD CONSTRAINT comment_addendum_comment_id_fkey FOREIGN KEY (comment_id) REFERENCES core.comment(id);
+
+
+--
 -- Name: comment comment_article_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
 --
 
@@ -7732,6 +7950,14 @@ ALTER TABLE ONLY core.comment
 
 ALTER TABLE ONLY core.comment
     ADD CONSTRAINT comment_parent_comment_id_fkey FOREIGN KEY (parent_comment_id) REFERENCES core.comment(id);
+
+
+--
+-- Name: comment_revision comment_revision_comment_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.comment_revision
+    ADD CONSTRAINT comment_revision_comment_id_fkey FOREIGN KEY (comment_id) REFERENCES core.comment(id);
 
 
 --

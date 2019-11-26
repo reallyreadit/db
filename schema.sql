@@ -2524,19 +2524,31 @@ CREATE FUNCTION notifications.create_follower_digest_notifications(frequency tex
 		FROM
 			notifications.current_preference AS preference
 			JOIN core.user_account AS recipient
-			    ON recipient.id = preference.user_account_id
-			JOIN social.active_following
-    			ON active_following.followee_user_account_id = recipient.id
+			    ON (
+					recipient.id = preference.user_account_id AND
+					preference.follower_digest_via_email = create_follower_digest_notifications.frequency::core.notification_event_frequency
+				)
+			JOIN core.following AS active_following
+    			ON (
+					active_following.followee_user_account_id = recipient.id AND
+    			    active_following.date_followed >= (
+						CASE create_follower_digest_notifications.frequency
+							WHEN 'daily' THEN core.utc_now() - '1 day'::interval
+							WHEN 'weekly' THEN core.utc_now() - '1 week'::interval
+						END
+					) AND
+					active_following.date_unfollowed IS NULL
+				)
     		JOIN core.user_account AS follower
     			ON follower.id = active_following.follower_user_account_id
+    		LEFT JOIN core.following AS inactive_following
+    			ON (
+    			    inactive_following.followee_user_account_id = active_following.followee_user_account_id AND
+    			    inactive_following.follower_user_account_id = active_following.follower_user_account_id AND
+    			    inactive_following.id != active_following.id
+    			)
 		WHERE
-			preference.follower_digest_via_email = create_follower_digest_notifications.frequency::core.notification_event_frequency AND
-		    active_following.date_followed >= (
-		        CASE create_follower_digest_notifications.frequency
-					WHEN 'daily' THEN core.utc_now() - '1 day'::interval
-					WHEN 'weekly' THEN core.utc_now() - '1 week'::interval
-				END
-		    )
+			 inactive_following.id IS NULL
 	),
     recipient AS (
       	SELECT

@@ -3021,7 +3021,7 @@ CREATE FUNCTION notifications.create_loopback_notifications(article_id bigint, c
 		    via_extension,
 		    via_push
 	),
-    alert_cache AS (
+    updated_user AS (
         UPDATE
 			core.user_account
 		SET
@@ -3030,24 +3030,33 @@ CREATE FUNCTION notifications.create_loopback_notifications(article_id bigint, c
 			 recipient
 		WHERE
 			user_account.id = recipient.user_account_id
+        RETURNING
+        	user_account.id,
+            user_account.name,
+            user_account.email,
+            user_account.aotd_alert,
+            user_account.reply_alert_count,
+            user_account.loopback_alert_count,
+            user_account.post_alert_count,
+            user_account.follower_alert_count
 	)
 	SELECT
 		receipt.id,
 		receipt.via_email,
 		receipt.via_push,
-		user_account.id,
-		user_account.name::text,
-		user_account.email::text,
+		updated_user.id,
+		updated_user.name,
+		updated_user.email,
 		coalesce(array_agg(device.token) FILTER (WHERE device.token IS NOT NULL), '{}'),
-		user_account.aotd_alert,
-		user_account.reply_alert_count,
-		user_account.loopback_alert_count,
-		user_account.post_alert_count,
-		user_account.follower_alert_count
+		updated_user.aotd_alert,
+		updated_user.reply_alert_count,
+		updated_user.loopback_alert_count,
+		updated_user.post_alert_count,
+		updated_user.follower_alert_count
 	FROM
 		receipt
-		JOIN core.user_account ON
-			user_account.id = receipt.user_account_id
+		JOIN updated_user ON
+			updated_user.id = receipt.user_account_id
 		LEFT JOIN notifications.registered_push_device AS device ON
 			device.user_account_id = receipt.user_account_id
 	WHERE
@@ -3056,7 +3065,14 @@ CREATE FUNCTION notifications.create_loopback_notifications(article_id bigint, c
 		receipt.id,
 		receipt.via_email,
 		receipt.via_push,
-		user_account.id;
+		updated_user.id,
+	    updated_user.name,
+		updated_user.email,
+		updated_user.aotd_alert,
+		updated_user.reply_alert_count,
+		updated_user.loopback_alert_count,
+		updated_user.post_alert_count,
+		updated_user.follower_alert_count;
 $$;
 
 
@@ -3270,7 +3286,7 @@ CREATE FUNCTION notifications.create_post_notifications(article_id bigint, poste
 		    via_extension,
 		    via_push
 	),
-    alert_cache AS (
+    updated_user AS (
         UPDATE
 			core.user_account
 		SET
@@ -3279,28 +3295,37 @@ CREATE FUNCTION notifications.create_post_notifications(article_id bigint, poste
 			 recipient
 		WHERE
 			user_account.id = recipient.user_account_id
+        RETURNING
+        	user_account.id,
+            user_account.name,
+            user_account.email,
+            user_account.aotd_alert,
+            user_account.reply_alert_count,
+            user_account.loopback_alert_count,
+            user_account.post_alert_count,
+            user_account.follower_alert_count
 	)
 	SELECT
 		receipt.id,
 		receipt.via_email,
 		receipt.via_push,
 	    user_article.date_completed IS NOT NULL,
-		user_account.id,
-		user_account.name::text,
-		user_account.email::text,
+		updated_user.id,
+		updated_user.name::text,
+		updated_user.email::text,
 		coalesce(array_agg(device.token) FILTER (WHERE device.token IS NOT NULL), '{}'),
-		user_account.aotd_alert,
-		user_account.reply_alert_count,
-		user_account.loopback_alert_count,
-		user_account.post_alert_count,
-		user_account.follower_alert_count
+		updated_user.aotd_alert,
+		updated_user.reply_alert_count,
+		updated_user.loopback_alert_count,
+		updated_user.post_alert_count,
+		updated_user.follower_alert_count
 	FROM
 		receipt
-		JOIN core.user_account
-			ON user_account.id = receipt.user_account_id
+		JOIN updated_user
+			ON updated_user.id = receipt.user_account_id
 		LEFT JOIN core.user_article
 		    ON (
-		        user_article.user_account_id = user_account.id AND
+		        user_article.user_account_id = updated_user.id AND
 		        user_article.article_id = create_post_notifications.article_id
 		    )
 		LEFT JOIN notifications.registered_push_device AS device
@@ -3311,7 +3336,14 @@ CREATE FUNCTION notifications.create_post_notifications(article_id bigint, poste
 		receipt.id,
 		receipt.via_email,
 		receipt.via_push,
-		user_account.id,
+		updated_user.id,
+	    updated_user.name,
+		updated_user.email,
+		updated_user.aotd_alert,
+		updated_user.reply_alert_count,
+		updated_user.loopback_alert_count,
+		updated_user.post_alert_count,
+		updated_user.follower_alert_count,
 	    user_article.date_completed;
 $$;
 

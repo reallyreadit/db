@@ -251,7 +251,8 @@ CREATE TYPE core.notification_push_unregistration_reason AS ENUM (
     'sign_out',
     'user_change',
     'token_change',
-    'service_unregistered'
+    'service_unregistered',
+    'reinstall'
 );
 
 
@@ -3928,6 +3929,15 @@ BEGIN
             WHERE
             	id = locals.existing_device.id;
 		END IF;
+        -- unregister any other currently registered devices using the same token
+        UPDATE
+            core.notification_push_device
+        SET
+        	date_unregistered = core.utc_now(),
+            unregistration_reason = 'reinstall'
+        WHERE
+        	token = register_push_device.token AND
+            date_unregistered IS NULL;
         -- create the registration and return the result
         RETURN QUERY
 		INSERT INTO

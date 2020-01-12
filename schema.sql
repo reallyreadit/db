@@ -3927,7 +3927,7 @@ BEGIN
                     END
 				)
             WHERE
-            	id = locals.existing_device.id;
+            	notification_push_device.id = locals.existing_device.id;
 		END IF;
         -- unregister any other currently registered devices using the same token
         UPDATE
@@ -3936,8 +3936,8 @@ BEGIN
         	date_unregistered = core.utc_now(),
             unregistration_reason = 'reinstall'
         WHERE
-        	token = register_push_device.token AND
-            date_unregistered IS NULL;
+        	notification_push_device.token = register_push_device.token AND
+            notification_push_device.date_unregistered IS NULL;
         -- create the registration and return the result
         RETURN QUERY
 		INSERT INTO

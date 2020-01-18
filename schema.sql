@@ -172,6 +172,36 @@ CREATE TYPE article_api.article_page_result AS (
 
 
 --
+-- Name: auth_service_association_method; Type: TYPE; Schema: core; Owner: -
+--
+
+CREATE TYPE core.auth_service_association_method AS ENUM (
+    'auto',
+    'manual'
+);
+
+
+--
+-- Name: auth_service_provider; Type: TYPE; Schema: core; Owner: -
+--
+
+CREATE TYPE core.auth_service_provider AS ENUM (
+    'apple'
+);
+
+
+--
+-- Name: auth_service_real_user_rating; Type: TYPE; Schema: core; Owner: -
+--
+
+CREATE TYPE core.auth_service_real_user_rating AS ENUM (
+    'likely_real',
+    'unknown',
+    'unsupported'
+);
+
+
+--
 -- Name: challenge_response_action; Type: TYPE; Schema: core; Owner: -
 --
 
@@ -626,7 +656,7 @@ $$;
 -- Name: get_user_account_creations(timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: analytics; Owner: -
 --
 
-CREATE FUNCTION analytics.get_user_account_creations(start_date timestamp without time zone, end_date timestamp without time zone) RETURNS TABLE(id bigint, name text, date_created timestamp without time zone, time_zone_name text, client_mode text, marketing_screen_variant integer, referrer_url text, initial_path text)
+CREATE FUNCTION analytics.get_user_account_creations(start_date timestamp without time zone, end_date timestamp without time zone) RETURNS TABLE(id bigint, name text, date_created timestamp without time zone, time_zone_name text, client_mode text, marketing_variant integer, referrer_url text, initial_path text, current_path text, action text)
     LANGUAGE sql STABLE
     AS $$
 	SELECT
@@ -635,9 +665,11 @@ CREATE FUNCTION analytics.get_user_account_creations(start_date timestamp withou
 	    user_account.date_created,
 	    time_zone.name,
 	    user_account.creation_analytics->'client'->>'mode',
-	    (user_account.creation_analytics->>'marketing_screen_variant')::int,
+	    (user_account.creation_analytics->>'marketing_variant')::int,
 	    user_account.creation_analytics->>'referrer_url',
-	    user_account.creation_analytics->>'initial_path'
+	    user_account.creation_analytics->>'initial_path',
+	    user_account.creation_analytics->>'current_path',
+	    user_account.creation_analytics->>'action'
 	FROM
 		user_account
     	LEFT JOIN time_zone
@@ -1598,6 +1630,61 @@ CREATE FUNCTION community_reads.get_aotds(user_account_id bigint, day_count inte
 			LIMIT get_aotds.day_count
 		)
 	);
+$$;
+
+
+--
+-- Name: get_articles_by_source_slug(text, bigint, integer, integer, integer, integer); Type: FUNCTION; Schema: community_reads; Owner: -
+--
+
+CREATE FUNCTION community_reads.get_articles_by_source_slug(slug text, user_account_id bigint, page_number integer, page_size integer, min_length integer, max_length integer) RETURNS SETOF article_api.article_page_result
+    LANGUAGE sql STABLE
+    AS $$
+    WITH publisher_article AS (
+        SELECT
+            community_read.id,
+            community_read.date_published
+        FROM
+        	community_reads.community_read
+        WHERE
+            source_id = (
+                SELECT
+                    source.id
+                FROM
+                    core.source
+                WHERE
+                    source.slug = get_articles_by_source_slug.slug
+            ) AND
+			core.matches_article_length(
+				community_read.word_count,
+			    get_articles_by_source_slug.min_length,
+			    get_articles_by_source_slug.max_length
+			)
+	)
+    SELECT
+    	articles.*,
+		(
+		    SELECT
+		        count(*)
+		    FROM
+		        publisher_article
+		)
+    FROM
+		article_api.get_articles(
+			user_account_id,
+			VARIADIC ARRAY(
+				SELECT
+					publisher_article.id
+				FROM
+					publisher_article
+				ORDER BY
+					publisher_article.date_published DESC
+				OFFSET
+					(get_articles_by_source_slug.page_number - 1) * get_articles_by_source_slug.page_size
+				LIMIT
+					get_articles_by_source_slug.page_size
+			)
+		) AS articles;
 $$;
 
 
@@ -5529,6 +5616,104 @@ $$;
 
 
 --
+-- Name: auth_service_association; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.auth_service_association (
+    date_associated timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    identity_id bigint NOT NULL,
+    authentication_id bigint NOT NULL,
+    user_account_id bigint NOT NULL,
+    association_method core.auth_service_association_method NOT NULL,
+    date_dissociated timestamp without time zone
+);
+
+
+--
+-- Name: auth_service_email_address; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.auth_service_email_address (
+    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    identity_id bigint NOT NULL,
+    provider_user_email_address text NOT NULL,
+    is_private boolean NOT NULL
+);
+
+
+--
+-- Name: auth_service_identity; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.auth_service_identity (
+    id bigint NOT NULL,
+    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    provider core.auth_service_provider NOT NULL,
+    provider_user_id text NOT NULL,
+    real_user_rating core.auth_service_real_user_rating,
+    creation_analytics jsonb NOT NULL
+);
+
+
+--
+-- Name: auth_service_account; Type: VIEW; Schema: user_account_api; Owner: -
+--
+
+CREATE VIEW user_account_api.auth_service_account AS
+ SELECT identity.id AS identity_id,
+    identity.date_created AS date_identity_created,
+    identity.creation_analytics AS identity_creation_analytics,
+    identity.provider,
+    identity.provider_user_id,
+    current_email_address.provider_user_email_address,
+    current_email_address.is_private AS is_email_address_private,
+    association.date_associated AS date_user_account_associated,
+    association.user_account_id AS associated_user_account_id
+   FROM ((core.auth_service_identity identity
+     JOIN ( SELECT email_address.identity_id,
+            email_address.provider_user_email_address,
+            email_address.is_private
+           FROM (core.auth_service_email_address email_address
+             LEFT JOIN core.auth_service_email_address newer_email_address ON (((newer_email_address.identity_id = email_address.identity_id) AND (newer_email_address.date_created > email_address.date_created))))
+          WHERE (newer_email_address.date_created IS NULL)) current_email_address ON ((current_email_address.identity_id = identity.id)))
+     LEFT JOIN core.auth_service_association association ON (((association.identity_id = identity.id) AND (association.date_dissociated IS NULL))));
+
+
+--
+-- Name: associate_auth_service_account(bigint, bigint, bigint, text); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.associate_auth_service_account(identity_id bigint, authentication_id bigint, user_account_id bigint, association_method text) RETURNS SETOF user_account_api.auth_service_account
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- insert the new association
+    INSERT INTO
+        core.auth_service_association (
+            identity_id,
+            authentication_id,
+            user_account_id,
+            association_method
+        )
+    VALUES (
+        associate_auth_service_account.identity_id,
+        associate_auth_service_account.authentication_id,
+        associate_auth_service_account.user_account_id,
+        associate_auth_service_account.association_method::core.auth_service_association_method
+    );
+     -- return from the view
+    RETURN QUERY
+    SELECT
+        *
+    FROM
+        user_account_api.auth_service_account AS account
+    WHERE
+        account.identity_id = associate_auth_service_account.identity_id;
+END;
+$$;
+
+
+--
 -- Name: change_email_address(bigint, text); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
@@ -5611,6 +5796,122 @@ $$;
 
 
 --
+-- Name: auth_service_authentication; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.auth_service_authentication (
+    id bigint NOT NULL,
+    date_authenticated timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    identity_id bigint NOT NULL,
+    session_id text NOT NULL
+);
+
+
+--
+-- Name: create_auth_service_authentication(bigint, text); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.create_auth_service_authentication(identity_id bigint, session_id text) RETURNS SETOF core.auth_service_authentication
+    LANGUAGE sql
+    AS $$
+    INSERT INTO
+        core.auth_service_authentication (
+            identity_id,
+            session_id
+        )
+    VALUES (
+        create_auth_service_authentication.identity_id,
+        create_auth_service_authentication.session_id
+    )
+    RETURNING
+        *;
+$$;
+
+
+--
+-- Name: create_auth_service_identity(text, text, text, boolean, text, text); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.create_auth_service_identity(provider text, provider_user_id text, provider_user_email_address text, is_email_address_private boolean, real_user_rating text, analytics text) RETURNS SETOF user_account_api.auth_service_account
+    LANGUAGE plpgsql
+    AS $$
+<<locals>>
+DECLARE
+    identity_id bigint;
+BEGIN
+	-- create the identity
+    INSERT INTO
+		core.auth_service_identity (
+    		provider,
+			provider_user_id,
+			real_user_rating,
+			creation_analytics
+    	)
+    VALUES (
+      	create_auth_service_identity.provider::core.auth_service_provider,
+        create_auth_service_identity.provider_user_id,
+        create_auth_service_identity.real_user_rating::core.auth_service_real_user_rating,
+        create_auth_service_identity.analytics::jsonb
+	)
+	RETURNING
+		id INTO locals.identity_id;
+    -- create the email address
+    INSERT INTO
+        core.auth_service_email_address (
+        	identity_id,
+        	provider_user_email_address,
+        	is_private
+		)
+	VALUES (
+	    locals.identity_id,
+	    create_auth_service_identity.provider_user_email_address,
+	    create_auth_service_identity.is_email_address_private
+    );
+	-- return from the view
+    RETURN QUERY
+    SELECT
+        *
+    FROM
+        user_account_api.auth_service_account AS account
+    WHERE
+        account.identity_id = locals.identity_id;
+END;
+$$;
+
+
+--
+-- Name: auth_service_refresh_token; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.auth_service_refresh_token (
+    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    identity_id bigint NOT NULL,
+    raw_value text NOT NULL
+);
+
+
+--
+-- Name: create_auth_service_refresh_token(bigint, text); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.create_auth_service_refresh_token(identity_id bigint, raw_value text) RETURNS SETOF core.auth_service_refresh_token
+    LANGUAGE sql
+    AS $$
+    INSERT INTO
+        core.auth_service_refresh_token (
+            identity_id,
+            raw_value
+        )
+    VALUES (
+        create_auth_service_refresh_token.identity_id,
+        create_auth_service_refresh_token.raw_value
+    )
+    RETURNING
+        *;
+$$;
+
+
+--
 -- Name: create_captcha_response(text, boolean, double precision, text, timestamp without time zone, text, text[]); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
@@ -5680,20 +5981,37 @@ CREATE TABLE core.password_reset_request (
     date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
     user_account_id bigint NOT NULL,
     email_address text NOT NULL,
-    date_completed timestamp without time zone
+    date_completed timestamp without time zone,
+    auth_service_authentication_id bigint
 );
 
 
 --
--- Name: create_password_reset_request(bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
+-- Name: create_password_reset_request(bigint, bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
-CREATE FUNCTION user_account_api.create_password_reset_request(user_account_id bigint) RETURNS SETOF core.password_reset_request
+CREATE FUNCTION user_account_api.create_password_reset_request(user_account_id bigint, auth_service_authentication_id bigint) RETURNS SETOF core.password_reset_request
     LANGUAGE sql
     AS $$
-	INSERT INTO password_reset_request (user_account_id, email_address)
-		VALUES (user_account_id, (SELECT email FROM user_account WHERE id = user_account_id))
-		RETURNING *;
+	INSERT INTO password_reset_request (
+	    user_account_id,
+	    email_address,
+	    auth_service_authentication_id
+	)
+	VALUES (
+	    user_account_id,
+	    (
+	        SELECT
+	            email
+	        FROM
+	            core.user_account
+	        WHERE
+	            user_account.id = create_password_reset_request.user_account_id
+	    ),
+	    create_password_reset_request.auth_service_authentication_id
+	)
+	RETURNING
+	    *;
 $$;
 
 
@@ -5705,8 +6023,8 @@ CREATE TABLE core.user_account (
     id bigint NOT NULL,
     name character varying(30) NOT NULL,
     email character varying(256) NOT NULL,
-    password_hash bytea NOT NULL,
-    password_salt bytea NOT NULL,
+    password_hash bytea,
+    password_salt bytea,
     date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
     role core.user_account_role DEFAULT 'regular'::core.user_account_role NOT NULL,
     time_zone_id bigint,
@@ -5756,6 +6074,71 @@ CREATE FUNCTION user_account_api.create_user_account(name text, email text, pass
 	    (SELECT id FROM new_user)
 	)
     SELECT * FROM new_user;
+$$;
+
+
+--
+-- Name: get_auth_service_account_by_identity_id(bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.get_auth_service_account_by_identity_id(identity_id bigint) RETURNS SETOF user_account_api.auth_service_account
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT
+    	*
+    FROM
+    	user_account_api.auth_service_account
+    WHERE
+        auth_service_account.identity_id = get_auth_service_account_by_identity_id.identity_id;
+$$;
+
+
+--
+-- Name: get_auth_service_account_by_provider_user_id(text, text); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.get_auth_service_account_by_provider_user_id(provider text, provider_user_id text) RETURNS SETOF user_account_api.auth_service_account
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT
+    	*
+    FROM
+    	user_account_api.auth_service_account
+    WHERE
+        auth_service_account.provider = get_auth_service_account_by_provider_user_id.provider::core.auth_service_provider AND
+    	auth_service_account.provider_user_id = get_auth_service_account_by_provider_user_id.provider_user_id;
+$$;
+
+
+--
+-- Name: get_auth_service_accounts_for_user_account(bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.get_auth_service_accounts_for_user_account(user_account_id bigint) RETURNS SETOF user_account_api.auth_service_account
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT
+    	*
+    FROM
+    	user_account_api.auth_service_account
+    WHERE
+        auth_service_account.associated_user_account_id = get_auth_service_accounts_for_user_account.user_account_id;
+$$;
+
+
+--
+-- Name: get_auth_service_authentication_by_id(bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.get_auth_service_authentication_by_id(authentication_id bigint) RETURNS SETOF core.auth_service_authentication
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT
+        *
+    FROM
+        core.auth_service_authentication AS authentication
+    WHERE
+        authentication.id =  get_auth_service_authentication_by_id.authentication_id;
 $$;
 
 
@@ -5927,6 +6310,38 @@ $$;
 
 
 --
+-- Name: update_auth_service_account_email_address(bigint, text, boolean); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.update_auth_service_account_email_address(identity_id bigint, email_address text, is_private boolean) RETURNS SETOF user_account_api.auth_service_account
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- insert the new email address
+    INSERT INTO
+        core.auth_service_email_address (
+            identity_id,
+            provider_user_email_address,
+            is_private
+        )
+    VALUES (
+        update_auth_service_account_email_address.identity_id,
+        update_auth_service_account_email_address.email_address,
+        update_auth_service_account_email_address.is_private
+    );
+    -- return from the view
+    RETURN QUERY
+    SELECT
+        *
+    FROM
+        user_account_api.auth_service_account AS account
+    WHERE
+        account.identity_id = update_auth_service_account_email_address.identity_id;
+END;
+$$;
+
+
+--
 -- Name: update_time_zone(bigint, bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
@@ -6075,7 +6490,9 @@ CREATE VIEW community_reads.community_read AS
     article.top_score,
     article.comment_count,
     article.read_count,
-    article.average_rating_score
+    article.average_rating_score,
+    article.date_published,
+    article.source_id
    FROM core.article
   WHERE ((article.comment_count > 0) OR (article.read_count > 1) OR (article.average_rating_score IS NOT NULL) OR (article.silent_post_count > 0));
 
@@ -6097,6 +6514,44 @@ CREATE SEQUENCE core.article_id_seq
 --
 
 ALTER SEQUENCE core.article_id_seq OWNED BY core.article.id;
+
+
+--
+-- Name: auth_service_authentication_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.auth_service_authentication_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: auth_service_authentication_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.auth_service_authentication_id_seq OWNED BY core.auth_service_authentication.id;
+
+
+--
+-- Name: auth_service_identity_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.auth_service_identity_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: auth_service_identity_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.auth_service_identity_id_seq OWNED BY core.auth_service_identity.id;
 
 
 --
@@ -7102,6 +7557,20 @@ ALTER TABLE ONLY core.article ALTER COLUMN id SET DEFAULT nextval('core.article_
 
 
 --
+-- Name: auth_service_authentication id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_authentication ALTER COLUMN id SET DEFAULT nextval('core.auth_service_authentication_id_seq'::regclass);
+
+
+--
+-- Name: auth_service_identity id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_identity ALTER COLUMN id SET DEFAULT nextval('core.auth_service_identity_id_seq'::regclass);
+
+
+--
 -- Name: author id; Type: DEFAULT; Schema: core; Owner: -
 --
 
@@ -7362,6 +7831,62 @@ ALTER TABLE ONLY core.article
 
 ALTER TABLE ONLY core.article_tag
     ADD CONSTRAINT article_tag_pkey PRIMARY KEY (article_id, tag_id);
+
+
+--
+-- Name: auth_service_association auth_service_association_authentication_id_key; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_association
+    ADD CONSTRAINT auth_service_association_authentication_id_key UNIQUE (authentication_id);
+
+
+--
+-- Name: auth_service_association auth_service_association_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_association
+    ADD CONSTRAINT auth_service_association_pkey PRIMARY KEY (date_associated, identity_id);
+
+
+--
+-- Name: auth_service_authentication auth_service_authentication_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_authentication
+    ADD CONSTRAINT auth_service_authentication_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: auth_service_email_address auth_service_email_address_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_email_address
+    ADD CONSTRAINT auth_service_email_address_pkey PRIMARY KEY (date_created, identity_id);
+
+
+--
+-- Name: auth_service_identity auth_service_identity_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_identity
+    ADD CONSTRAINT auth_service_identity_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: auth_service_identity auth_service_identity_provider_provider_user_id_key; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_identity
+    ADD CONSTRAINT auth_service_identity_provider_provider_user_id_key UNIQUE (provider, provider_user_id);
+
+
+--
+-- Name: auth_service_refresh_token auth_service_refresh_token_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_refresh_token
+    ADD CONSTRAINT auth_service_refresh_token_pkey PRIMARY KEY (date_created, identity_id);
 
 
 --
@@ -7765,6 +8290,13 @@ CREATE INDEX article_word_count_idx ON core.article USING btree (word_count);
 
 
 --
+-- Name: auth_service_association_unique_associated_identity_id; Type: INDEX; Schema: core; Owner: -
+--
+
+CREATE UNIQUE INDEX auth_service_association_unique_associated_identity_id ON core.auth_service_association USING btree (identity_id) WHERE (date_dissociated IS NULL);
+
+
+--
 -- Name: comment_article_id_idx; Type: INDEX; Schema: core; Owner: -
 --
 
@@ -7940,6 +8472,54 @@ ALTER TABLE ONLY core.article_tag
 
 ALTER TABLE ONLY core.article_tag
     ADD CONSTRAINT article_tag_tag_id_fkey FOREIGN KEY (tag_id) REFERENCES core.tag(id);
+
+
+--
+-- Name: auth_service_association auth_service_association_authentication_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_association
+    ADD CONSTRAINT auth_service_association_authentication_id_fkey FOREIGN KEY (authentication_id) REFERENCES core.auth_service_authentication(id);
+
+
+--
+-- Name: auth_service_association auth_service_association_identity_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_association
+    ADD CONSTRAINT auth_service_association_identity_id_fkey FOREIGN KEY (identity_id) REFERENCES core.auth_service_identity(id);
+
+
+--
+-- Name: auth_service_association auth_service_association_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_association
+    ADD CONSTRAINT auth_service_association_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
+
+
+--
+-- Name: auth_service_authentication auth_service_authentication_identity_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_authentication
+    ADD CONSTRAINT auth_service_authentication_identity_id_fkey FOREIGN KEY (identity_id) REFERENCES core.auth_service_identity(id);
+
+
+--
+-- Name: auth_service_email_address auth_service_email_address_identity_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_email_address
+    ADD CONSTRAINT auth_service_email_address_identity_id_fkey FOREIGN KEY (identity_id) REFERENCES core.auth_service_identity(id);
+
+
+--
+-- Name: auth_service_refresh_token auth_service_refresh_token_identity_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_refresh_token
+    ADD CONSTRAINT auth_service_refresh_token_identity_id_fkey FOREIGN KEY (identity_id) REFERENCES core.auth_service_identity(id);
 
 
 --
@@ -8228,6 +8808,14 @@ ALTER TABLE ONLY core.notification_receipt
 
 ALTER TABLE ONLY core.page
     ADD CONSTRAINT page_article_id_fkey FOREIGN KEY (article_id) REFERENCES core.article(id);
+
+
+--
+-- Name: password_reset_request password_reset_request_auth_service_authentication_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.password_reset_request
+    ADD CONSTRAINT password_reset_request_auth_service_authentication_id_fkey FOREIGN KEY (auth_service_authentication_id) REFERENCES core.auth_service_authentication(id);
 
 
 --

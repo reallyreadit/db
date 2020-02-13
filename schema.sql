@@ -224,6 +224,19 @@ CREATE TYPE core.notification_action AS ENUM (
 
 
 --
+-- Name: notification_authorization_request_result; Type: TYPE; Schema: core; Owner: -
+--
+
+CREATE TYPE core.notification_authorization_request_result AS ENUM (
+    'none',
+    'granted',
+    'denied',
+    'previously_granted',
+    'previously_denied'
+);
+
+
+--
 -- Name: notification_channel; Type: TYPE; Schema: core; Owner: -
 --
 
@@ -750,6 +763,74 @@ CREATE FUNCTION analytics.log_extension_removal_feedback(installation_id uuid, r
     	installation_id = log_extension_removal_feedback.installation_id AND
         reason IS NULL
 	);
+$$;
+
+
+--
+-- Name: log_orientation_analytics(bigint, integer, boolean, integer, integer, boolean, integer, text, boolean, integer, uuid, boolean, integer); Type: FUNCTION; Schema: analytics; Owner: -
+--
+
+CREATE FUNCTION analytics.log_orientation_analytics(user_account_id bigint, tracking_play_count integer, tracking_skipped boolean, tracking_duration integer, import_play_count integer, import_skipped boolean, import_duration integer, notifications_result text, notifications_skipped boolean, notifications_duration integer, share_result_id uuid, share_skipped boolean, share_duration integer) RETURNS void
+    LANGUAGE sql
+    AS $$
+    INSERT INTO core.orientation_analytics (
+        user_account_id,
+        tracking_play_count,
+        tracking_skipped,
+        tracking_duration,
+        import_play_count,
+        import_skipped,
+        import_duration,
+        notifications_result,
+        notifications_skipped,
+        notifications_duration,
+        share_result_id,
+        share_skipped,
+        share_duration
+    )
+    VALUES (
+        log_orientation_analytics.user_account_id,
+        log_orientation_analytics.tracking_play_count,
+        log_orientation_analytics.tracking_skipped,
+        log_orientation_analytics.tracking_duration,
+        log_orientation_analytics.import_play_count,
+        log_orientation_analytics.import_skipped,
+        log_orientation_analytics.import_duration,
+        log_orientation_analytics.notifications_result::core.notification_authorization_request_result,
+        log_orientation_analytics.notifications_skipped,
+        log_orientation_analytics.notifications_duration,
+        log_orientation_analytics.share_result_id,
+        log_orientation_analytics.share_skipped,
+        log_orientation_analytics.share_duration
+    );
+$$;
+
+
+--
+-- Name: log_share_result(uuid, text, bigint, text, text, boolean, text); Type: FUNCTION; Schema: analytics; Owner: -
+--
+
+CREATE FUNCTION analytics.log_share_result(id uuid, client_type text, user_account_id bigint, action text, activity_type text, completed boolean, error text) RETURNS void
+    LANGUAGE sql
+    AS $$
+    INSERT INTO core.share_result (
+        id,
+        client_type,
+        user_account_id,
+        action,
+        activity_type,
+        completed,
+        error
+    )
+    VALUES (
+        log_share_result.id,
+        log_share_result.client_type,
+        log_share_result.user_account_id,
+        log_share_result.action,
+        log_share_result.activity_type,
+        log_share_result.completed,
+        log_share_result.error
+    );
 $$;
 
 
@@ -7198,6 +7279,28 @@ ALTER SEQUENCE core.notification_receipt_id_seq OWNED BY core.notification_recei
 
 
 --
+-- Name: orientation_analytics; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.orientation_analytics (
+    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    user_account_id bigint NOT NULL,
+    tracking_play_count integer NOT NULL,
+    tracking_skipped boolean NOT NULL,
+    tracking_duration integer NOT NULL,
+    import_play_count integer NOT NULL,
+    import_skipped boolean NOT NULL,
+    import_duration integer NOT NULL,
+    notifications_result core.notification_authorization_request_result NOT NULL,
+    notifications_skipped boolean NOT NULL,
+    notifications_duration integer NOT NULL,
+    share_result_id uuid,
+    share_skipped boolean NOT NULL,
+    share_duration integer NOT NULL
+);
+
+
+--
 -- Name: page_id_seq; Type: SEQUENCE; Schema: core; Owner: -
 --
 
@@ -7252,6 +7355,22 @@ CREATE SEQUENCE core.rating_id_seq
 --
 
 ALTER SEQUENCE core.rating_id_seq OWNED BY core.rating.id;
+
+
+--
+-- Name: share_result; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.share_result (
+    id uuid NOT NULL,
+    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    client_type text NOT NULL,
+    user_account_id bigint,
+    action text NOT NULL,
+    activity_type text NOT NULL,
+    completed boolean,
+    error text
+);
 
 
 --
@@ -8090,6 +8209,14 @@ ALTER TABLE ONLY core.notification_receipt
 
 
 --
+-- Name: orientation_analytics orientation_analytics_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.orientation_analytics
+    ADD CONSTRAINT orientation_analytics_pkey PRIMARY KEY (date_created, user_account_id);
+
+
+--
 -- Name: page page_pkey; Type: CONSTRAINT; Schema: core; Owner: -
 --
 
@@ -8111,6 +8238,14 @@ ALTER TABLE ONLY core.password_reset_request
 
 ALTER TABLE ONLY core.rating
     ADD CONSTRAINT rating_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: share_result share_result_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.share_result
+    ADD CONSTRAINT share_result_pkey PRIMARY KEY (id);
 
 
 --
@@ -8803,6 +8938,22 @@ ALTER TABLE ONLY core.notification_receipt
 
 
 --
+-- Name: orientation_analytics orientation_analytics_share_result_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.orientation_analytics
+    ADD CONSTRAINT orientation_analytics_share_result_id_fkey FOREIGN KEY (share_result_id) REFERENCES core.share_result(id);
+
+
+--
+-- Name: orientation_analytics orientation_analytics_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.orientation_analytics
+    ADD CONSTRAINT orientation_analytics_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
+
+
+--
 -- Name: page page_article_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
 --
 
@@ -8840,6 +8991,14 @@ ALTER TABLE ONLY core.rating
 
 ALTER TABLE ONLY core.rating
     ADD CONSTRAINT rating_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
+
+
+--
+-- Name: share_result share_result_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.share_result
+    ADD CONSTRAINT share_result_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
 
 
 --

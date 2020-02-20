@@ -767,6 +767,27 @@ $$;
 
 
 --
+-- Name: log_new_platform_notification_request(text, text, text); Type: FUNCTION; Schema: analytics; Owner: -
+--
+
+CREATE FUNCTION analytics.log_new_platform_notification_request(email_address text, ip_address text, user_agent text) RETURNS void
+    LANGUAGE sql
+    AS $$
+    INSERT INTO
+        core.new_platform_notification_request (
+            email_address,
+            ip_address,
+            user_agent
+        )
+    VALUES (
+        log_new_platform_notification_request.email_address,
+        log_new_platform_notification_request.ip_address,
+        log_new_platform_notification_request.user_agent
+    );
+$$;
+
+
+--
 -- Name: log_orientation_analytics(bigint, integer, boolean, integer, integer, boolean, integer, text, boolean, integer, uuid, boolean, integer); Type: FUNCTION; Schema: analytics; Owner: -
 --
 
@@ -7150,6 +7171,38 @@ ALTER SEQUENCE core.following_id_seq OWNED BY core.following.id;
 
 
 --
+-- Name: new_platform_notification_request; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.new_platform_notification_request (
+    id bigint NOT NULL,
+    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    email_address character varying(512) NOT NULL,
+    ip_address text NOT NULL,
+    user_agent text NOT NULL
+);
+
+
+--
+-- Name: new_platform_notification_request_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.new_platform_notification_request_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: new_platform_notification_request_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.new_platform_notification_request_id_seq OWNED BY core.new_platform_notification_request.id;
+
+
+--
 -- Name: notification_data; Type: TABLE; Schema: core; Owner: -
 --
 
@@ -7837,6 +7890,13 @@ ALTER TABLE ONLY core.following ALTER COLUMN id SET DEFAULT nextval('core.follow
 
 
 --
+-- Name: new_platform_notification_request id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.new_platform_notification_request ALTER COLUMN id SET DEFAULT nextval('core.new_platform_notification_request_id_seq'::regclass);
+
+
+--
 -- Name: notification_data id; Type: DEFAULT; Schema: core; Owner: -
 --
 
@@ -8185,6 +8245,14 @@ ALTER TABLE ONLY core.extension_removal
 
 ALTER TABLE ONLY core.following
     ADD CONSTRAINT following_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: new_platform_notification_request new_platform_notification_request_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.new_platform_notification_request
+    ADD CONSTRAINT new_platform_notification_request_pkey PRIMARY KEY (id);
 
 
 --

@@ -129,10 +129,10 @@ CREATE TYPE article_api.article AS (
 	rating_score core.rating_score,
 	dates_posted timestamp without time zone[],
 	hot_score integer,
-	hot_velocity numeric,
 	rating_count integer,
 	first_poster text,
-	flair core.article_flair
+	flair core.article_flair,
+	aotd_contender_rank integer
 );
 
 
@@ -163,10 +163,10 @@ CREATE TYPE article_api.article_page_result AS (
 	rating_score core.rating_score,
 	dates_posted timestamp without time zone[],
 	hot_score integer,
-	hot_velocity numeric,
 	rating_count integer,
 	first_poster text,
 	flair core.article_flair,
+	aotd_contender_rank integer,
 	total_count bigint
 );
 
@@ -489,10 +489,10 @@ CREATE TYPE social.article_post_page_result AS (
 	rating_score core.rating_score,
 	dates_posted timestamp without time zone[],
 	hot_score integer,
-	hot_velocity numeric,
 	rating_count integer,
 	first_poster text,
 	flair core.article_flair,
+	aotd_contender_rank integer,
 	post_date_created timestamp without time zone,
 	user_name text,
 	comment_id bigint,
@@ -1137,10 +1137,10 @@ CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC articl
 		user_article_rating.score,
 	    coalesce(posts.dates, '{}'),
 	    article.hot_score,
-		0.0,
 	    article.rating_count,
 	    first_poster.name,
-	    article.flair
+	    article.flair,
+	    article.aotd_contender_rank
 	FROM
 		article
 		JOIN article_api.article_pages ON (
@@ -1171,15 +1171,15 @@ CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC articl
 		)
 		LEFT JOIN (
 			SELECT
-				article_id,
-				array_agg(date_created) AS dates
+				post.article_id,
+				array_agg(post.date_created) AS dates
 		    FROM
 		    	social.post
 		    WHERE
-		    	article_id = ANY (get_articles.article_ids) AND
-		        user_account_id = get_articles.user_account_id
+		    	post.article_id = ANY (get_articles.article_ids) AND
+		        post.user_account_id = get_articles.user_account_id
 			GROUP BY
-				article_id
+				post.article_id
 		) AS posts
 			ON posts.article_id = article.id
 		LEFT JOIN core.user_account AS first_poster
@@ -1382,101 +1382,135 @@ $$;
 CREATE FUNCTION article_api.score_articles() RETURNS void
     LANGUAGE sql
     AS $$
-	WITH score AS (
+    WITH scorable_criteria AS (
+        SELECT
+            core.utc_now() - '1 month'::interval - ('10 minutes'::interval) AS cutoff_date
+    ),
+	scored_article AS (
 		SELECT
-			article.id AS article_id,
+			community_read.id,
+		    community_read.aotd_timestamp,
 			(
 				(
-					coalesce(scored_first_comment.score, 0) +
-					(coalesce(reads.score, 0) * greatest(1, core.estimate_article_length(article.word_count) / 7))::int
-				) * (coalesce(article.average_rating_score, 5) / 5)
+					coalesce(scored_first_user_comment.hot_score, 0) +
+					(coalesce(scored_read.hot_score, 0) * greatest(1, core.estimate_article_length(community_read.word_count) / 7))::int
+				) * (coalesce(community_read.average_rating_score, 5) / 5)
 			) / (
 				CASE
 				    -- divide articles from billloundy.com and blog.readup.com by 10
-				    WHEN article.source_id IN (7038, 48542)
+				    WHEN community_read.source_id IN (7038, 48542)
 				    THEN 10
 				    ELSE 1
 				END
-			) AS hot,
+			) AS hot_score,
 			(
 				(
-					coalesce(scored_first_comment.count, 0) +
-					(coalesce(reads.count, 0) * greatest(1, core.estimate_article_length(article.word_count) / 7))::int
-				) * (coalesce(article.average_rating_score, 5) / 5)
-			) AS top
+					coalesce(scored_first_user_comment.count, 0) +
+					(coalesce(scored_read.count, 0) * greatest(1, core.estimate_article_length(community_read.word_count) / 7))::int
+				) * (coalesce(community_read.average_rating_score, 5) / 5)
+			) AS top_score
 		FROM
+		    community_reads.community_read JOIN
 			(
-				SELECT DISTINCT article_id AS id
-				FROM comment
-				WHERE date_created > utc_now() - '1 month'::interval
+				SELECT DISTINCT
+				    article_id AS id
+				FROM
+				    core.comment
+				WHERE
+				    comment.date_created >= (SELECT cutoff_date FROM scorable_criteria)
 				UNION
-				SELECT DISTINCT article_id AS id
-				FROM user_article
-				WHERE date_completed > utc_now() - '1 month'::interval
-			) AS scorable_article
-			JOIN article ON article.id = scorable_article.id
+				SELECT DISTINCT
+				    article_id AS id
+				FROM
+				    core.user_article
+				WHERE
+				    user_article.date_completed >= (SELECT cutoff_date FROM scorable_criteria)
+			) AS scorable_article ON
+		        community_read.id = scorable_article.id
 			LEFT JOIN (
 				SELECT
-					count(*) AS count,
+					count(first_user_comment.*) AS count,
 					sum(
 						CASE
-							WHEN age < '18 hours' THEN 400
-							WHEN age < '36 hours' THEN 200
-							WHEN age < '72 hours' THEN 150
-							WHEN age < '1 week' THEN 100
-							WHEN age < '2 weeks' THEN 50
-							WHEN age < '1 month' THEN 5
-							ELSE 1
+							WHEN first_user_comment.age < '18 hours' THEN 400
+							WHEN first_user_comment.age < '36 hours' THEN 200
+							WHEN first_user_comment.age < '72 hours' THEN 150
+							WHEN first_user_comment.age < '1 week' THEN 100
+							WHEN first_user_comment.age < '2 weeks' THEN 50
+							WHEN first_user_comment.age < '1 month' THEN 5
+							ELSE 0
 						END
-					) AS score,
-					article_id
+					) AS hot_score,
+					first_user_comment.article_id
 				FROM (
 					SELECT
-						comment.article_id,
-						utc_now() - comment.date_created AS age
+						first_user_comment.article_id,
+						utc_now() - first_user_comment.date_created AS age
 					FROM
-						comment
-				    	LEFT JOIN comment AS earlier_comment ON (
-				    		earlier_comment.article_id = comment.article_id AND
-				    		earlier_comment.user_account_id = comment.user_account_id AND
-				    		earlier_comment.date_created < comment.date_created
+						core.comment AS first_user_comment
+				    	LEFT JOIN core.comment AS earlier_user_comment ON (
+				    		earlier_user_comment.article_id = first_user_comment.article_id AND
+				    		earlier_user_comment.user_account_id = first_user_comment.user_account_id AND
+				    		earlier_user_comment.date_created < first_user_comment.date_created
 						)
 				    WHERE
-				    	earlier_comment.id IS NULL
-				) AS first_comment
-				GROUP BY article_id
-			) AS scored_first_comment ON scored_first_comment.article_id = article.id
+				    	earlier_user_comment.id IS NULL
+				) AS first_user_comment
+				GROUP BY
+				    first_user_comment.article_id
+			) AS scored_first_user_comment ON
+			    scored_first_user_comment.article_id = community_read.id
 			LEFT JOIN (
 				SELECT
-					count(*) AS count,
+					count(read.*) AS count,
 					sum(
 						CASE
-							WHEN age < '18 hours' THEN 350
-							WHEN age < '36 hours' THEN 175
-							WHEN age < '72 hours' THEN 125
-							WHEN age < '1 week' THEN 75
-							WHEN age < '2 weeks' THEN 25
-							WHEN age < '1 month' THEN 5
-							ELSE 1
+							WHEN read.age < '18 hours' THEN 350
+							WHEN read.age < '36 hours' THEN 175
+							WHEN read.age < '72 hours' THEN 125
+							WHEN read.age < '1 week' THEN 75
+							WHEN read.age < '2 weeks' THEN 25
+							WHEN read.age < '1 month' THEN 5
+							ELSE 0
 						END
-					) AS score,
-					article_id
+					) AS hot_score,
+					read.article_id
 				FROM (
 					SELECT
-						article_id,
-						utc_now() - date_completed AS age
-					FROM user_article
-					WHERE date_completed IS NOT NULL
+						user_article.article_id,
+						utc_now() - user_article.date_completed AS age
+					FROM
+					    core.user_article
+					WHERE
+					    user_article.date_completed IS NOT NULL
 				) AS read
-				GROUP BY article_id
-			) AS reads ON reads.article_id = article.id
-	)
-	UPDATE article
+				GROUP BY
+				    read.article_id
+			) AS scored_read ON
+			    scored_read.article_id = community_read.id
+	),
+    aotd_contender AS (
+        SELECT
+            scored_article.id,
+            rank() OVER (ORDER BY scored_article.hot_score DESC) AS rank
+        FROM
+            scored_article
+        WHERE
+            scored_article.hot_score > 0 AND
+            scored_article.aotd_timestamp IS NULL
+    )
+	UPDATE
+	    core.article
 	SET
-		hot_score = score.hot,
-		top_score = score.top
-	FROM score
-	WHERE score.article_id = article.id;
+		hot_score = scored_article.hot_score,
+		top_score = scored_article.top_score,
+	    aotd_contender_rank = coalesce(aotd_contender.rank, 0)
+	FROM
+	    scored_article
+        LEFT JOIN aotd_contender ON
+            scored_article.id = aotd_contender.id
+	WHERE
+	    scored_article.id = article.id;
 $$;
 
 
@@ -6555,7 +6589,8 @@ CREATE TABLE core.article (
     silent_post_count integer DEFAULT 0 NOT NULL,
     rating_count integer DEFAULT 0 NOT NULL,
     first_poster_id bigint,
-    flair core.article_flair
+    flair core.article_flair,
+    aotd_contender_rank integer DEFAULT 0 NOT NULL
 );
 
 

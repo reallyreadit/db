@@ -1418,8 +1418,8 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
 				) * (coalesce(community_read.average_rating_score, 5) / 5)
 			) / (
 				CASE
-				    -- divide articles from billloundy.com and blog.readup.com by 10
-				    WHEN community_read.source_id IN (7038, 48542)
+				    -- divide articles from billloundy.com, blog.readup.com and billloundy.substack.com by 10
+				    WHEN community_read.source_id IN (7038, 48542, 63802)
 				    THEN 10
 				    ELSE 1
 				END

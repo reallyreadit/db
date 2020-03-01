@@ -6737,6 +6737,8 @@ DECLARE
             token.token_value
         FROM
             user_account_api.current_auth_service_access_token AS token
+        WHERE
+            token.identity_id = store_auth_service_access_token.identity_id
     );
 BEGIN
     IF locals.current_token_value = store_auth_service_access_token.token_value THEN

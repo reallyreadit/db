@@ -177,7 +177,8 @@ CREATE TYPE article_api.article_page_result AS (
 
 CREATE TYPE core.auth_service_association_method AS ENUM (
     'auto',
-    'manual'
+    'manual',
+    'link'
 );
 
 
@@ -186,7 +187,8 @@ CREATE TYPE core.auth_service_association_method AS ENUM (
 --
 
 CREATE TYPE core.auth_service_provider AS ENUM (
-    'apple'
+    'apple',
+    'twitter'
 );
 
 
@@ -197,7 +199,8 @@ CREATE TYPE core.auth_service_provider AS ENUM (
 CREATE TYPE core.auth_service_real_user_rating AS ENUM (
     'likely_real',
     'unknown',
-    'unsupported'
+    'unsupported',
+    'verified'
 );
 
 
@@ -5752,6 +5755,21 @@ $$;
 
 
 --
+-- Name: auth_service_access_token; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.auth_service_access_token (
+    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    last_stored timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    identity_id bigint NOT NULL,
+    request_id bigint NOT NULL,
+    token_value text NOT NULL,
+    token_secret text NOT NULL,
+    date_revoked timestamp without time zone
+);
+
+
+--
 -- Name: auth_service_association; Type: TABLE; Schema: core; Owner: -
 --
 
@@ -5766,18 +5784,6 @@ CREATE TABLE core.auth_service_association (
 
 
 --
--- Name: auth_service_email_address; Type: TABLE; Schema: core; Owner: -
---
-
-CREATE TABLE core.auth_service_email_address (
-    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
-    identity_id bigint NOT NULL,
-    provider_user_email_address text NOT NULL,
-    is_private boolean NOT NULL
-);
-
-
---
 -- Name: auth_service_identity; Type: TABLE; Schema: core; Owner: -
 --
 
@@ -5787,8 +5793,82 @@ CREATE TABLE core.auth_service_identity (
     provider core.auth_service_provider NOT NULL,
     provider_user_id text NOT NULL,
     real_user_rating core.auth_service_real_user_rating,
-    creation_analytics jsonb NOT NULL
+    sign_up_analytics jsonb
 );
+
+
+--
+-- Name: auth_service_integration_preference; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.auth_service_integration_preference (
+    id bigint NOT NULL,
+    last_modified timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    identity_id bigint NOT NULL,
+    is_post_enabled boolean NOT NULL
+);
+
+
+--
+-- Name: auth_service_user; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.auth_service_user (
+    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    identity_id bigint NOT NULL,
+    email_address text,
+    is_email_address_private boolean NOT NULL,
+    name text,
+    handle text,
+    CONSTRAINT auth_service_user_identifier_check CHECK (((email_address IS NOT NULL) OR (handle IS NOT NULL)))
+);
+
+
+--
+-- Name: current_auth_service_access_token; Type: VIEW; Schema: user_account_api; Owner: -
+--
+
+CREATE VIEW user_account_api.current_auth_service_access_token AS
+ SELECT token.date_created,
+    token.last_stored,
+    token.identity_id,
+    token.request_id,
+    token.token_value,
+    token.token_secret,
+    token.date_revoked
+   FROM (core.auth_service_access_token token
+     LEFT JOIN core.auth_service_access_token newer_token ON (((newer_token.identity_id = token.identity_id) AND (newer_token.date_created > token.date_created))))
+  WHERE (newer_token.date_created IS NULL);
+
+
+--
+-- Name: current_auth_service_integration_preference; Type: VIEW; Schema: user_account_api; Owner: -
+--
+
+CREATE VIEW user_account_api.current_auth_service_integration_preference AS
+ SELECT preference.id,
+    preference.last_modified,
+    preference.identity_id,
+    preference.is_post_enabled
+   FROM (core.auth_service_integration_preference preference
+     LEFT JOIN core.auth_service_integration_preference newer_preference ON (((newer_preference.identity_id = preference.identity_id) AND (newer_preference.last_modified > preference.last_modified))))
+  WHERE (newer_preference.id IS NULL);
+
+
+--
+-- Name: current_auth_service_user; Type: VIEW; Schema: user_account_api; Owner: -
+--
+
+CREATE VIEW user_account_api.current_auth_service_user AS
+ SELECT service_user.date_created,
+    service_user.identity_id,
+    service_user.email_address,
+    service_user.is_email_address_private,
+    service_user.name,
+    service_user.handle
+   FROM (core.auth_service_user service_user
+     LEFT JOIN core.auth_service_user newer_service_user ON (((newer_service_user.identity_id = service_user.identity_id) AND (newer_service_user.date_created > service_user.date_created))))
+  WHERE (newer_service_user.date_created IS NULL);
 
 
 --
@@ -5798,21 +5878,23 @@ CREATE TABLE core.auth_service_identity (
 CREATE VIEW user_account_api.auth_service_account AS
  SELECT identity.id AS identity_id,
     identity.date_created AS date_identity_created,
-    identity.creation_analytics AS identity_creation_analytics,
+    identity.sign_up_analytics AS identity_sign_up_analytics,
     identity.provider,
     identity.provider_user_id,
-    current_email_address.provider_user_email_address,
-    current_email_address.is_private AS is_email_address_private,
+    current_service_user.email_address AS provider_user_email_address,
+    COALESCE(current_service_user.is_email_address_private, false) AS is_email_address_private,
+    current_service_user.name AS provider_user_name,
+    current_service_user.handle AS provider_user_handle,
     association.date_associated AS date_user_account_associated,
-    association.user_account_id AS associated_user_account_id
-   FROM ((core.auth_service_identity identity
-     JOIN ( SELECT email_address.identity_id,
-            email_address.provider_user_email_address,
-            email_address.is_private
-           FROM (core.auth_service_email_address email_address
-             LEFT JOIN core.auth_service_email_address newer_email_address ON (((newer_email_address.identity_id = email_address.identity_id) AND (newer_email_address.date_created > email_address.date_created))))
-          WHERE (newer_email_address.date_created IS NULL)) current_email_address ON ((current_email_address.identity_id = identity.id)))
-     LEFT JOIN core.auth_service_association association ON (((association.identity_id = identity.id) AND (association.date_dissociated IS NULL))));
+    association.user_account_id AS associated_user_account_id,
+    current_active_access_token.token_value AS access_token_value,
+    current_active_access_token.token_secret AS access_token_secret,
+    COALESCE(current_integration_preference.is_post_enabled, false) AS is_post_integration_enabled
+   FROM ((((core.auth_service_identity identity
+     JOIN user_account_api.current_auth_service_user current_service_user ON ((current_service_user.identity_id = identity.id)))
+     LEFT JOIN core.auth_service_association association ON (((association.identity_id = identity.id) AND (association.date_dissociated IS NULL))))
+     LEFT JOIN user_account_api.current_auth_service_access_token current_active_access_token ON (((current_active_access_token.identity_id = identity.id) AND (current_active_access_token.date_revoked IS NULL))))
+     LEFT JOIN user_account_api.current_auth_service_integration_preference current_integration_preference ON ((current_integration_preference.identity_id = identity.id)));
 
 
 --
@@ -5846,6 +5928,39 @@ BEGIN
     WHERE
         account.identity_id = associate_auth_service_account.identity_id;
 END;
+$$;
+
+
+--
+-- Name: auth_service_request_token; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.auth_service_request_token (
+    id bigint NOT NULL,
+    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    provider core.auth_service_provider NOT NULL,
+    token_value text NOT NULL,
+    token_secret text NOT NULL,
+    date_cancelled timestamp without time zone,
+    sign_up_analytics jsonb
+);
+
+
+--
+-- Name: cancel_auth_service_request_token(text); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.cancel_auth_service_request_token(token_value text) RETURNS SETOF core.auth_service_request_token
+    LANGUAGE sql
+    AS $$
+    UPDATE
+        core.auth_service_request_token
+    SET
+        date_cancelled = core.utc_now()
+    WHERE
+        auth_service_request_token.token_value = cancel_auth_service_request_token.token_value
+    RETURNING
+        *;
 $$;
 
 
@@ -5965,10 +6080,10 @@ $$;
 
 
 --
--- Name: create_auth_service_identity(text, text, text, boolean, text, text); Type: FUNCTION; Schema: user_account_api; Owner: -
+-- Name: create_auth_service_identity(text, text, text, boolean, text, text, text, text); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
-CREATE FUNCTION user_account_api.create_auth_service_identity(provider text, provider_user_id text, provider_user_email_address text, is_email_address_private boolean, real_user_rating text, analytics text) RETURNS SETOF user_account_api.auth_service_account
+CREATE FUNCTION user_account_api.create_auth_service_identity(provider text, provider_user_id text, provider_user_email_address text, is_email_address_private boolean, provider_user_name text, provider_user_handle text, real_user_rating text, sign_up_analytics text) RETURNS SETOF user_account_api.auth_service_account
     LANGUAGE plpgsql
     AS $$
 <<locals>>
@@ -5981,27 +6096,31 @@ BEGIN
     		provider,
 			provider_user_id,
 			real_user_rating,
-			creation_analytics
+			sign_up_analytics
     	)
     VALUES (
       	create_auth_service_identity.provider::core.auth_service_provider,
         create_auth_service_identity.provider_user_id,
         create_auth_service_identity.real_user_rating::core.auth_service_real_user_rating,
-        create_auth_service_identity.analytics::jsonb
+        create_auth_service_identity.sign_up_analytics::jsonb
 	)
 	RETURNING
 		id INTO locals.identity_id;
-    -- create the email address
+    -- create the user
     INSERT INTO
-        core.auth_service_email_address (
+        core.auth_service_user (
         	identity_id,
-        	provider_user_email_address,
-        	is_private
+        	email_address,
+        	is_email_address_private,
+        	name,
+        	handle
 		)
 	VALUES (
 	    locals.identity_id,
 	    create_auth_service_identity.provider_user_email_address,
-	    create_auth_service_identity.is_email_address_private
+	    create_auth_service_identity.is_email_address_private,
+	    create_auth_service_identity.provider_user_name,
+	    create_auth_service_identity.provider_user_handle
     );
 	-- return from the view
     RETURN QUERY
@@ -6012,6 +6131,49 @@ BEGIN
     WHERE
         account.identity_id = locals.identity_id;
 END;
+$$;
+
+
+--
+-- Name: auth_service_post; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.auth_service_post (
+    id bigint NOT NULL,
+    identity_id bigint NOT NULL,
+    date_posted timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    comment_id bigint,
+    silent_post_id bigint,
+    content text NOT NULL,
+    provider_post_id text NOT NULL,
+    CONSTRAINT auth_service_post_reference_check CHECK (((comment_id IS NOT NULL) OR (silent_post_id IS NOT NULL)))
+);
+
+
+--
+-- Name: create_auth_service_post(bigint, bigint, bigint, text, text); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.create_auth_service_post(identity_id bigint, comment_id bigint, silent_post_id bigint, content text, provider_post_id text) RETURNS SETOF core.auth_service_post
+    LANGUAGE sql
+    AS $$
+    INSERT INTO
+        core.auth_service_post (
+            identity_id,
+            comment_id,
+            silent_post_id,
+            content,
+            provider_post_id
+        )
+    VALUES (
+        create_auth_service_post.identity_id,
+        create_auth_service_post.comment_id,
+        create_auth_service_post.silent_post_id,
+        create_auth_service_post.content,
+        create_auth_service_post.provider_post_id
+    )
+    RETURNING
+        *;
 $$;
 
 
@@ -6041,6 +6203,31 @@ CREATE FUNCTION user_account_api.create_auth_service_refresh_token(identity_id b
     VALUES (
         create_auth_service_refresh_token.identity_id,
         create_auth_service_refresh_token.raw_value
+    )
+    RETURNING
+        *;
+$$;
+
+
+--
+-- Name: create_auth_service_request_token(text, text, text, text); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.create_auth_service_request_token(provider text, token_value text, token_secret text, sign_up_analytics text) RETURNS SETOF core.auth_service_request_token
+    LANGUAGE sql
+    AS $$
+    INSERT INTO
+        core.auth_service_request_token (
+            provider,
+            token_value,
+            token_secret,
+            sign_up_analytics
+        )
+    VALUES (
+        create_auth_service_request_token.provider::core.auth_service_provider,
+        create_auth_service_request_token.token_value,
+        create_auth_service_request_token.token_secret,
+        create_auth_service_request_token.sign_up_analytics::jsonb
     )
     RETURNING
         *;
@@ -6279,6 +6466,22 @@ $$;
 
 
 --
+-- Name: get_auth_service_request_token(text); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.get_auth_service_request_token(token_value text) RETURNS SETOF core.auth_service_request_token
+    LANGUAGE sql
+    AS $$
+    SELECT
+        *
+    FROM
+        core.auth_service_request_token
+    WHERE
+        auth_service_request_token.token_value = get_auth_service_request_token.token_value;
+$$;
+
+
+--
 -- Name: get_email_confirmation(bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
@@ -6446,24 +6649,156 @@ $$;
 
 
 --
--- Name: update_auth_service_account_email_address(bigint, text, boolean); Type: FUNCTION; Schema: user_account_api; Owner: -
+-- Name: revoke_auth_service_access_token(text); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
-CREATE FUNCTION user_account_api.update_auth_service_account_email_address(identity_id bigint, email_address text, is_private boolean) RETURNS SETOF user_account_api.auth_service_account
+CREATE FUNCTION user_account_api.revoke_auth_service_access_token(token_value text) RETURNS SETOF core.auth_service_access_token
+    LANGUAGE sql
+    AS $$
+    UPDATE
+        core.auth_service_access_token
+    SET
+        date_revoked = core.utc_now()
+    WHERE
+        auth_service_access_token.token_value = revoke_auth_service_access_token.token_value
+    RETURNING
+        *;
+$$;
+
+
+--
+-- Name: set_auth_service_account_integration_preference(bigint, boolean); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.set_auth_service_account_integration_preference(identity_id bigint, is_post_enabled boolean) RETURNS SETOF user_account_api.auth_service_account
+    LANGUAGE plpgsql
+    AS $$
+<<locals>>
+DECLARE
+    existing_preference_id bigint;
+BEGIN
+    -- check for an existing record
+	SELECT
+		preference.id
+    INTO
+    	locals.existing_preference_id
+    FROM
+    	core.auth_service_integration_preference AS preference
+    WHERE
+    	preference.identity_id = set_auth_service_account_integration_preference.identity_id AND
+    	preference.last_modified >= core.utc_now() - '1 hour'::interval
+    ORDER BY
+    	preference.last_modified DESC
+    LIMIT 1
+    FOR UPDATE;
+    -- update the existing record or create a new one
+    IF existing_preference_id IS NOT NULL THEN
+		UPDATE
+		    core.auth_service_integration_preference
+        SET
+            last_modified = core.utc_now(),
+            is_post_enabled = set_auth_service_account_integration_preference.is_post_enabled
+        WHERE
+        	id = locals.existing_preference_id;
+	ELSE
+    	INSERT INTO
+    	    core.auth_service_integration_preference (
+    	        identity_id,
+    	        is_post_enabled
+			)
+		VALUES (
+		    set_auth_service_account_integration_preference.identity_id,
+		    set_auth_service_account_integration_preference.is_post_enabled
+		);
+    END IF;
+    -- return from view
+    RETURN QUERY
+    SELECT
+        *
+    FROM
+        user_account_api.auth_service_account
+    WHERE
+        auth_service_account.identity_id = set_auth_service_account_integration_preference.identity_id;
+END;
+$$;
+
+
+--
+-- Name: store_auth_service_access_token(bigint, bigint, text, text); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.store_auth_service_access_token(identity_id bigint, request_id bigint, token_value text, token_secret text) RETURNS SETOF core.auth_service_access_token
+    LANGUAGE plpgsql
+    AS $$
+<<locals>>
+DECLARE
+    current_token_value CONSTANT text := (
+        SELECT
+            token.token_value
+        FROM
+            user_account_api.current_auth_service_access_token AS token
+    );
+BEGIN
+    IF locals.current_token_value = store_auth_service_access_token.token_value THEN
+        RETURN QUERY
+        UPDATE
+            core.auth_service_access_token AS access_token
+        SET
+            last_stored = core.utc_now()
+        WHERE
+            access_token.token_value = locals.current_token_value
+        RETURNING
+            *;
+    ELSE
+        IF locals.current_token_value IS NOT NULL THEN
+            PERFORM user_account_api.revoke_auth_service_access_token(
+                token_value => locals.current_token_value
+            );
+        END IF;
+        RETURN QUERY
+        INSERT INTO
+            core.auth_service_access_token (
+                identity_id,
+                request_id,
+                token_value,
+                token_secret
+            )
+        VALUES (
+            store_auth_service_access_token.identity_id,
+            store_auth_service_access_token.request_id,
+            store_auth_service_access_token.token_value,
+            store_auth_service_access_token.token_secret
+        )
+        RETURNING
+            *;
+    END IF;
+END;
+$$;
+
+
+--
+-- Name: update_auth_service_account_user(bigint, text, boolean, text, text); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.update_auth_service_account_user(identity_id bigint, email_address text, is_email_address_private boolean, name text, handle text) RETURNS SETOF user_account_api.auth_service_account
     LANGUAGE plpgsql
     AS $$
 BEGIN
-    -- insert the new email address
+    -- insert the new user
     INSERT INTO
-        core.auth_service_email_address (
+        core.auth_service_user (
             identity_id,
-            provider_user_email_address,
-            is_private
+            email_address,
+            is_email_address_private,
+            name,
+            handle
         )
     VALUES (
-        update_auth_service_account_email_address.identity_id,
-        update_auth_service_account_email_address.email_address,
-        update_auth_service_account_email_address.is_private
+        update_auth_service_account_user.identity_id,
+        update_auth_service_account_user.email_address,
+        update_auth_service_account_user.is_email_address_private,
+        update_auth_service_account_user.name,
+        update_auth_service_account_user.handle
     );
     -- return from the view
     RETURN QUERY
@@ -6472,7 +6807,7 @@ BEGIN
     FROM
         user_account_api.auth_service_account AS account
     WHERE
-        account.identity_id = update_auth_service_account_email_address.identity_id;
+        account.identity_id = update_auth_service_account_user.identity_id;
 END;
 $$;
 
@@ -6689,6 +7024,63 @@ CREATE SEQUENCE core.auth_service_identity_id_seq
 --
 
 ALTER SEQUENCE core.auth_service_identity_id_seq OWNED BY core.auth_service_identity.id;
+
+
+--
+-- Name: auth_service_integration_preference_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.auth_service_integration_preference_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: auth_service_integration_preference_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.auth_service_integration_preference_id_seq OWNED BY core.auth_service_integration_preference.id;
+
+
+--
+-- Name: auth_service_post_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.auth_service_post_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: auth_service_post_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.auth_service_post_id_seq OWNED BY core.auth_service_post.id;
+
+
+--
+-- Name: auth_service_request_token_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.auth_service_request_token_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: auth_service_request_token_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.auth_service_request_token_id_seq OWNED BY core.auth_service_request_token.id;
 
 
 --
@@ -7778,6 +8170,27 @@ ALTER TABLE ONLY core.auth_service_identity ALTER COLUMN id SET DEFAULT nextval(
 
 
 --
+-- Name: auth_service_integration_preference id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_integration_preference ALTER COLUMN id SET DEFAULT nextval('core.auth_service_integration_preference_id_seq'::regclass);
+
+
+--
+-- Name: auth_service_post id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_post ALTER COLUMN id SET DEFAULT nextval('core.auth_service_post_id_seq'::regclass);
+
+
+--
+-- Name: auth_service_request_token id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_request_token ALTER COLUMN id SET DEFAULT nextval('core.auth_service_request_token_id_seq'::regclass);
+
+
+--
 -- Name: author id; Type: DEFAULT; Schema: core; Owner: -
 --
 
@@ -8048,6 +8461,22 @@ ALTER TABLE ONLY core.article_tag
 
 
 --
+-- Name: auth_service_access_token auth_service_access_token_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_access_token
+    ADD CONSTRAINT auth_service_access_token_pkey PRIMARY KEY (date_created, identity_id);
+
+
+--
+-- Name: auth_service_access_token auth_service_access_token_token_value_key; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_access_token
+    ADD CONSTRAINT auth_service_access_token_token_value_key UNIQUE (token_value);
+
+
+--
 -- Name: auth_service_association auth_service_association_authentication_id_key; Type: CONSTRAINT; Schema: core; Owner: -
 --
 
@@ -8072,14 +8501,6 @@ ALTER TABLE ONLY core.auth_service_authentication
 
 
 --
--- Name: auth_service_email_address auth_service_email_address_pkey; Type: CONSTRAINT; Schema: core; Owner: -
---
-
-ALTER TABLE ONLY core.auth_service_email_address
-    ADD CONSTRAINT auth_service_email_address_pkey PRIMARY KEY (date_created, identity_id);
-
-
---
 -- Name: auth_service_identity auth_service_identity_pkey; Type: CONSTRAINT; Schema: core; Owner: -
 --
 
@@ -8096,11 +8517,51 @@ ALTER TABLE ONLY core.auth_service_identity
 
 
 --
+-- Name: auth_service_integration_preference auth_service_integration_preference_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_integration_preference
+    ADD CONSTRAINT auth_service_integration_preference_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: auth_service_post auth_service_post_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_post
+    ADD CONSTRAINT auth_service_post_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: auth_service_refresh_token auth_service_refresh_token_pkey; Type: CONSTRAINT; Schema: core; Owner: -
 --
 
 ALTER TABLE ONLY core.auth_service_refresh_token
     ADD CONSTRAINT auth_service_refresh_token_pkey PRIMARY KEY (date_created, identity_id);
+
+
+--
+-- Name: auth_service_request_token auth_service_request_token_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_request_token
+    ADD CONSTRAINT auth_service_request_token_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: auth_service_request_token auth_service_request_token_token_value_key; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_request_token
+    ADD CONSTRAINT auth_service_request_token_token_value_key UNIQUE (token_value);
+
+
+--
+-- Name: auth_service_user auth_service_user_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_user
+    ADD CONSTRAINT auth_service_user_pkey PRIMARY KEY (date_created, identity_id);
 
 
 --
@@ -8528,6 +8989,13 @@ CREATE INDEX article_word_count_idx ON core.article USING btree (word_count);
 
 
 --
+-- Name: auth_service_access_token_unique_valid_identity_id; Type: INDEX; Schema: core; Owner: -
+--
+
+CREATE UNIQUE INDEX auth_service_access_token_unique_valid_identity_id ON core.auth_service_access_token USING btree (identity_id) WHERE (date_revoked IS NULL);
+
+
+--
 -- Name: auth_service_association_unique_associated_identity_id; Type: INDEX; Schema: core; Owner: -
 --
 
@@ -8713,6 +9181,22 @@ ALTER TABLE ONLY core.article_tag
 
 
 --
+-- Name: auth_service_access_token auth_service_access_token_identity_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_access_token
+    ADD CONSTRAINT auth_service_access_token_identity_id_fkey FOREIGN KEY (identity_id) REFERENCES core.auth_service_identity(id);
+
+
+--
+-- Name: auth_service_access_token auth_service_access_token_request_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_access_token
+    ADD CONSTRAINT auth_service_access_token_request_id_fkey FOREIGN KEY (request_id) REFERENCES core.auth_service_request_token(id);
+
+
+--
 -- Name: auth_service_association auth_service_association_authentication_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
 --
 
@@ -8745,11 +9229,35 @@ ALTER TABLE ONLY core.auth_service_authentication
 
 
 --
--- Name: auth_service_email_address auth_service_email_address_identity_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+-- Name: auth_service_integration_preference auth_service_integration_preference_identity_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
 --
 
-ALTER TABLE ONLY core.auth_service_email_address
-    ADD CONSTRAINT auth_service_email_address_identity_id_fkey FOREIGN KEY (identity_id) REFERENCES core.auth_service_identity(id);
+ALTER TABLE ONLY core.auth_service_integration_preference
+    ADD CONSTRAINT auth_service_integration_preference_identity_id_fkey FOREIGN KEY (identity_id) REFERENCES core.auth_service_identity(id);
+
+
+--
+-- Name: auth_service_post auth_service_post_comment_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_post
+    ADD CONSTRAINT auth_service_post_comment_id_fkey FOREIGN KEY (comment_id) REFERENCES core.comment(id);
+
+
+--
+-- Name: auth_service_post auth_service_post_identity_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_post
+    ADD CONSTRAINT auth_service_post_identity_id_fkey FOREIGN KEY (identity_id) REFERENCES core.auth_service_identity(id);
+
+
+--
+-- Name: auth_service_post auth_service_post_silent_post_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_post
+    ADD CONSTRAINT auth_service_post_silent_post_id_fkey FOREIGN KEY (silent_post_id) REFERENCES core.silent_post(id);
 
 
 --
@@ -8758,6 +9266,14 @@ ALTER TABLE ONLY core.auth_service_email_address
 
 ALTER TABLE ONLY core.auth_service_refresh_token
     ADD CONSTRAINT auth_service_refresh_token_identity_id_fkey FOREIGN KEY (identity_id) REFERENCES core.auth_service_identity(id);
+
+
+--
+-- Name: auth_service_user auth_service_user_identity_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.auth_service_user
+    ADD CONSTRAINT auth_service_user_identity_id_fkey FOREIGN KEY (identity_id) REFERENCES core.auth_service_identity(id);
 
 
 --

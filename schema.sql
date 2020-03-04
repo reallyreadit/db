@@ -339,6 +339,18 @@ CREATE DOMAIN core.time_zone_name AS text
 
 
 --
+-- Name: twitter_handle_assignment; Type: TYPE; Schema: core; Owner: -
+--
+
+CREATE TYPE core.twitter_handle_assignment AS ENUM (
+    'none',
+    'manual',
+    'name_search',
+    'name_and_company_search'
+);
+
+
+--
 -- Name: user_account_role; Type: TYPE; Schema: core; Owner: -
 --
 
@@ -859,45 +871,235 @@ $$;
 
 
 --
+-- Name: utc_now(); Type: FUNCTION; Schema: core; Owner: -
+--
+
+CREATE FUNCTION core.utc_now() RETURNS timestamp without time zone
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT local_now('UTC');
+$$;
+
+
+SET default_with_oids = false;
+
+--
+-- Name: twitter_bot_tweet; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.twitter_bot_tweet (
+    id bigint NOT NULL,
+    handle text NOT NULL,
+    date_tweeted timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    article_id bigint,
+    comment_id bigint,
+    content text NOT NULL,
+    tweet_id text NOT NULL,
+    CONSTRAINT twitter_bot_tweet_reference CHECK (((article_id IS NOT NULL) OR (comment_id IS NOT NULL)))
+);
+
+
+--
+-- Name: log_twitter_bot_tweet(text, bigint, bigint, text, text); Type: FUNCTION; Schema: analytics; Owner: -
+--
+
+CREATE FUNCTION analytics.log_twitter_bot_tweet(handle text, article_id bigint, comment_id bigint, content text, tweet_id text) RETURNS SETOF core.twitter_bot_tweet
+    LANGUAGE sql
+    AS $$
+    INSERT INTO
+        core.twitter_bot_tweet (
+            handle,
+            article_id,
+            comment_id,
+            content,
+            tweet_id
+        )
+    VALUES (
+        log_twitter_bot_tweet.handle,
+        log_twitter_bot_tweet.article_id,
+        log_twitter_bot_tweet.comment_id,
+        log_twitter_bot_tweet.content,
+        log_twitter_bot_tweet.tweet_id
+    )
+    RETURNING
+        *;
+$$;
+
+
+--
+-- Name: author; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.author (
+    id bigint NOT NULL,
+    name text NOT NULL,
+    url text,
+    twitter_handle text,
+    twitter_handle_assignment core.twitter_handle_assignment DEFAULT 'none'::core.twitter_handle_assignment NOT NULL
+);
+
+
+--
+-- Name: assign_twitter_handle_to_author(bigint, text, text); Type: FUNCTION; Schema: article_api; Owner: -
+--
+
+CREATE FUNCTION article_api.assign_twitter_handle_to_author(author_id bigint, twitter_handle text, twitter_handle_assignment text) RETURNS SETOF core.author
+    LANGUAGE sql
+    AS $$
+    UPDATE
+        core.author
+    SET
+        twitter_handle = assign_twitter_handle_to_author.twitter_handle,
+        twitter_handle_assignment = assign_twitter_handle_to_author.twitter_handle_assignment::core.twitter_handle_assignment
+    WHERE
+        author.id = assign_twitter_handle_to_author.author_id
+    RETURNING
+        *;
+$$;
+
+
+--
+-- Name: source; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.source (
+    id bigint NOT NULL,
+    name character varying(256),
+    url character varying(256) NOT NULL,
+    hostname character varying(256) NOT NULL,
+    slug character varying(256) NOT NULL,
+    twitter_handle text,
+    twitter_handle_assignment core.twitter_handle_assignment DEFAULT 'none'::core.twitter_handle_assignment NOT NULL
+);
+
+
+--
+-- Name: assign_twitter_handle_to_source(bigint, text, text); Type: FUNCTION; Schema: article_api; Owner: -
+--
+
+CREATE FUNCTION article_api.assign_twitter_handle_to_source(source_id bigint, twitter_handle text, twitter_handle_assignment text) RETURNS SETOF core.source
+    LANGUAGE sql
+    AS $$
+    UPDATE
+        core.source
+    SET
+        twitter_handle = assign_twitter_handle_to_source.twitter_handle,
+        twitter_handle_assignment = assign_twitter_handle_to_source.twitter_handle_assignment::core.twitter_handle_assignment
+    WHERE
+        source.id = assign_twitter_handle_to_source.source_id
+    RETURNING
+        *;
+$$;
+
+
+--
 -- Name: create_article(text, text, bigint, timestamp without time zone, timestamp without time zone, text, text, text[], text[], text[]); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
 CREATE FUNCTION article_api.create_article(title text, slug text, source_id bigint, date_published timestamp without time zone, date_modified timestamp without time zone, section text, description text, author_names text[], author_urls text[], tags text[]) RETURNS bigint
     LANGUAGE plpgsql
     AS $$
+<<locals>>
 DECLARE
-	article_id	 		bigint;
-	current_author_url	text;
-	current_author_id	bigint;
-	current_tag			text;
-	current_tag_id		bigint;
+	article_id bigint;
+	current_author_id bigint;
+	current_tag text;
+	current_tag_id bigint;
 BEGIN
-	INSERT INTO article (title, slug, source_id, date_published, date_modified, section, description)
-		VALUES (title, slug, source_id, date_published, date_modified, section, description)
-		RETURNING id INTO article_id;
-	FOR i IN 1..coalesce(array_length(author_names, 1), 0) LOOP
-		current_author_url := author_urls[i];
-		SELECT id INTO current_author_id FROM author WHERE url = current_author_url;
-		IF current_author_id IS NULL THEN
-			INSERT INTO author (name, url) VALUES (author_names[i], current_author_url)
-				RETURNING id INTO current_author_id;
+	INSERT INTO
+	    core.article (
+            title,
+            slug,
+            source_id,
+            date_published,
+            date_modified,
+            section,
+            description
+        )
+	VALUES (
+	    create_article.title,
+	    create_article.slug,
+	    create_article.source_id,
+	    create_article.date_published,
+	    create_article.date_modified,
+	    create_article.section,
+	    create_article.description
+	)
+	RETURNING
+	    id
+	INTO
+	    locals.article_id;
+	FOR i IN 1..coalesce(array_length(create_article.author_names, 1), 0) LOOP
+		SELECT
+		    author.id
+		INTO
+		    locals.current_author_id
+		FROM
+		    core.author
+		WHERE
+		    lower(author.name) = lower(create_article.author_names[i]);
+		IF locals.current_author_id IS NULL THEN
+			INSERT INTO
+			    core.author (
+                    name,
+                    url
+                )
+			VALUES (
+			    create_article.author_names[i],
+			    create_article.author_urls[i]
+			)
+			RETURNING
+			    id
+			INTO
+			    locals.current_author_id;
 		END IF;
-		INSERT INTO article_author (article_id, author_id) VALUES (article_id, current_author_id);
+		INSERT INTO
+		    core.article_author (
+                article_id,
+                author_id
+            )
+		VALUES (
+		    locals.article_id,
+		    locals.current_author_id
+		);
 	END LOOP;
-	FOREACH current_tag IN ARRAY tags
-	LOOP
-		SELECT id INTO current_tag_id FROM tag WHERE name = current_tag;
-		IF current_tag_id IS NULL THEN
-			INSERT INTO tag (name) VALUES (current_tag) RETURNING id INTO current_tag_id;
+	FOREACH locals.current_tag IN ARRAY create_article.tags LOOP
+		SELECT
+		    tag.id
+		INTO
+		    locals.current_tag_id
+		FROM
+		    core.tag
+		WHERE
+		    tag.name = locals.current_tag;
+		IF locals.current_tag_id IS NULL THEN
+			INSERT INTO
+			    core.tag (
+			        name
+			    )
+			VALUES (
+			    locals.current_tag
+			)
+			RETURNING
+			    id
+			INTO
+			    locals.current_tag_id;
 		END IF;
-		INSERT INTO article_tag (article_id, tag_id) VALUES (article_id, current_tag_id);
+		INSERT INTO
+		    core.article_tag (
+		        article_id,
+		        tag_id
+		    )
+		VALUES (
+		    locals.article_id,
+		    locals.current_tag_id
+		);
 	END LOOP;
-	RETURN article_id;
+	RETURN
+	    locals.article_id;
 END;
 $$;
 
-
-SET default_with_oids = false;
 
 --
 -- Name: page; Type: TABLE; Schema: core; Owner: -
@@ -935,20 +1137,6 @@ $$;
 
 
 --
--- Name: source; Type: TABLE; Schema: core; Owner: -
---
-
-CREATE TABLE core.source (
-    id bigint NOT NULL,
-    name character varying(256),
-    url character varying(256) NOT NULL,
-    hostname character varying(256) NOT NULL,
-    slug character varying(256) NOT NULL,
-    parser text
-);
-
-
---
 -- Name: create_source(text, text, text, text); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
@@ -956,17 +1144,6 @@ CREATE FUNCTION article_api.create_source(name text, url text, hostname text, sl
     LANGUAGE sql
     AS $$
 	INSERT INTO source (name, url, hostname, slug) VALUES (name, url, hostname, slug) RETURNING *;
-$$;
-
-
---
--- Name: utc_now(); Type: FUNCTION; Schema: core; Owner: -
---
-
-CREATE FUNCTION core.utc_now() RETURNS timestamp without time zone
-    LANGUAGE sql STABLE
-    AS $$
-	SELECT local_now('UTC');
 $$;
 
 
@@ -1214,6 +1391,24 @@ $$;
 
 
 --
+-- Name: get_authors_of_article(bigint); Type: FUNCTION; Schema: article_api; Owner: -
+--
+
+CREATE FUNCTION article_api.get_authors_of_article(article_id bigint) RETURNS SETOF core.author
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT
+        author.*
+    FROM
+        core.article_author
+        JOIN core.author ON
+            author.id = article_author.author_id
+    WHERE
+        article_author.article_id = get_authors_of_article.article_id;
+$$;
+
+
+--
 -- Name: get_page(bigint); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
@@ -1238,6 +1433,24 @@ CREATE FUNCTION article_api.get_percent_complete(readable_word_count numeric, wo
 	   ),
 	   0
 	);
+$$;
+
+
+--
+-- Name: get_source_of_article(bigint); Type: FUNCTION; Schema: article_api; Owner: -
+--
+
+CREATE FUNCTION article_api.get_source_of_article(article_id bigint) RETURNS SETOF core.source
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT
+        source.*
+    FROM
+        core.article
+        JOIN core.source ON
+            source.id = article.source_id
+    WHERE
+        article.id = get_source_of_article.article_id;
 $$;
 
 
@@ -6842,17 +7055,6 @@ CREATE TABLE core.article_author (
 
 
 --
--- Name: author; Type: TABLE; Schema: core; Owner: -
---
-
-CREATE TABLE core.author (
-    id bigint NOT NULL,
-    name text NOT NULL,
-    url text
-);
-
-
---
 -- Name: article_authors; Type: VIEW; Schema: article_api; Owner: -
 --
 
@@ -7943,6 +8145,25 @@ ALTER SEQUENCE core.tag_id_seq OWNED BY core.tag.id;
 
 
 --
+-- Name: twitter_bot_tweet_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.twitter_bot_tweet_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: twitter_bot_tweet_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.twitter_bot_tweet_id_seq OWNED BY core.twitter_bot_tweet.id;
+
+
+--
 -- Name: user_account_id_seq; Type: SEQUENCE; Schema: core; Owner: -
 --
 
@@ -8407,6 +8628,13 @@ ALTER TABLE ONLY core.source_rule ALTER COLUMN id SET DEFAULT nextval('core.sour
 --
 
 ALTER TABLE ONLY core.tag ALTER COLUMN id SET DEFAULT nextval('core.tag_id_seq'::regclass);
+
+
+--
+-- Name: twitter_bot_tweet id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.twitter_bot_tweet ALTER COLUMN id SET DEFAULT nextval('core.twitter_bot_tweet_id_seq'::regclass);
 
 
 --
@@ -8900,6 +9128,14 @@ ALTER TABLE ONLY core.time_zone
 
 ALTER TABLE ONLY core.time_zone
     ADD CONSTRAINT time_zone_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: twitter_bot_tweet twitter_bot_tweet_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.twitter_bot_tweet
+    ADD CONSTRAINT twitter_bot_tweet_pkey PRIMARY KEY (id);
 
 
 --
@@ -9652,6 +9888,22 @@ ALTER TABLE ONLY core.star
 
 ALTER TABLE ONLY core.star
     ADD CONSTRAINT star_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
+
+
+--
+-- Name: twitter_bot_tweet twitter_bot_tweet_article_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.twitter_bot_tweet
+    ADD CONSTRAINT twitter_bot_tweet_article_id_fkey FOREIGN KEY (article_id) REFERENCES core.article(id);
+
+
+--
+-- Name: twitter_bot_tweet twitter_bot_tweet_comment_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.twitter_bot_tweet
+    ADD CONSTRAINT twitter_bot_tweet_comment_id_fkey FOREIGN KEY (comment_id) REFERENCES core.comment(id);
 
 
 --

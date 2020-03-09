@@ -1627,24 +1627,37 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
 		SELECT
 			community_read.id,
 		    community_read.aotd_timestamp,
-			(
-				(
-					coalesce(scored_first_user_comment.hot_score, 0) +
-					(coalesce(scored_read.hot_score, 0) * greatest(1, core.estimate_article_length(community_read.word_count) / 7))::int
-				) * (coalesce(community_read.average_rating_score, 5) / 5)
-			) / (
-				CASE
-				    -- divide articles from billloundy.com, blog.readup.com and billloundy.substack.com by 10
-				    WHEN community_read.source_id IN (7038, 48542, 63802)
-				    THEN 10
-				    ELSE 1
-				END
+			round(
+			    (
+                    (coalesce(scored_first_user_comment.hot_score, 0) + coalesce(scored_read.hot_score, 0)) *
+                    (
+                        CASE
+                            WHEN community_read.word_count <= 184 THEN 0.15
+                            WHEN community_read.word_count <= 368 THEN 0.25
+                            ELSE (core.estimate_article_length(community_read.word_count) + 4)::double precision / 7
+                        END
+                    ) *
+                    (coalesce(community_read.average_rating_score, 5) / 5)
+                ) /
+			    (
+                    CASE
+                        -- divide articles from billloundy.com, blog.readup.com and billloundy.substack.com by 10
+                        WHEN community_read.source_id IN (7038, 48542, 63802)
+                        THEN 10
+                        ELSE 1
+                    END
+                )
 			) AS hot_score,
-			(
-				(
-					coalesce(scored_first_user_comment.count, 0) +
-					(coalesce(scored_read.count, 0) * greatest(1, core.estimate_article_length(community_read.word_count) / 7))::int
-				) * (coalesce(community_read.average_rating_score, 5) / 5)
+			round(
+                (coalesce(scored_first_user_comment.count, 0) + coalesce(scored_read.count, 0)) *
+                (
+                    CASE
+                        WHEN community_read.word_count <= 184 THEN 0.15
+                        WHEN community_read.word_count <= 368 THEN 0.25
+                        ELSE (core.estimate_article_length(community_read.word_count) + 4)::double precision / 7
+                    END
+                ) *
+                (coalesce(community_read.average_rating_score, 5) / 5)
 			) AS top_score
 		FROM
 		    community_reads.community_read JOIN

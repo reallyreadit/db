@@ -1634,7 +1634,7 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
                         CASE
                             WHEN community_read.word_count <= 184 THEN 0.15
                             WHEN community_read.word_count <= 368 THEN 0.25
-                            ELSE (core.estimate_article_length(community_read.word_count) + 4)::double precision / 7
+                            ELSE (least(core.estimate_article_length(community_read.word_count), 30) + 4)::double precision / 7
                         END
                     ) *
                     (coalesce(community_read.average_rating_score, 5) / 5)
@@ -1654,7 +1654,7 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
                     CASE
                         WHEN community_read.word_count <= 184 THEN 0.15
                         WHEN community_read.word_count <= 368 THEN 0.25
-                        ELSE (core.estimate_article_length(community_read.word_count) + 4)::double precision / 7
+                        ELSE (least(core.estimate_article_length(community_read.word_count), 30) + 4)::double precision / 7
                     END
                 ) *
                 (coalesce(community_read.average_rating_score, 5) / 5)

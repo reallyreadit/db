@@ -6315,18 +6315,6 @@ CREATE TABLE core.auth_service_identity (
 
 
 --
--- Name: auth_service_integration_preference; Type: TABLE; Schema: core; Owner: -
---
-
-CREATE TABLE core.auth_service_integration_preference (
-    id bigint NOT NULL,
-    last_modified timestamp without time zone DEFAULT core.utc_now() NOT NULL,
-    identity_id bigint NOT NULL,
-    is_post_enabled boolean NOT NULL
-);
-
-
---
 -- Name: auth_service_user; Type: TABLE; Schema: core; Owner: -
 --
 
@@ -6356,20 +6344,6 @@ CREATE VIEW user_account_api.current_auth_service_access_token AS
    FROM (core.auth_service_access_token token
      LEFT JOIN core.auth_service_access_token newer_token ON (((newer_token.identity_id = token.identity_id) AND (newer_token.date_created > token.date_created))))
   WHERE (newer_token.date_created IS NULL);
-
-
---
--- Name: current_auth_service_integration_preference; Type: VIEW; Schema: user_account_api; Owner: -
---
-
-CREATE VIEW user_account_api.current_auth_service_integration_preference AS
- SELECT preference.id,
-    preference.last_modified,
-    preference.identity_id,
-    preference.is_post_enabled
-   FROM (core.auth_service_integration_preference preference
-     LEFT JOIN core.auth_service_integration_preference newer_preference ON (((newer_preference.identity_id = preference.identity_id) AND (newer_preference.last_modified > preference.last_modified))))
-  WHERE (newer_preference.id IS NULL);
 
 
 --
@@ -6405,13 +6379,11 @@ CREATE VIEW user_account_api.auth_service_account AS
     association.date_associated AS date_user_account_associated,
     association.user_account_id AS associated_user_account_id,
     current_active_access_token.token_value AS access_token_value,
-    current_active_access_token.token_secret AS access_token_secret,
-    COALESCE(current_integration_preference.is_post_enabled, false) AS is_post_integration_enabled
-   FROM ((((core.auth_service_identity identity
+    current_active_access_token.token_secret AS access_token_secret
+   FROM (((core.auth_service_identity identity
      JOIN user_account_api.current_auth_service_user current_service_user ON ((current_service_user.identity_id = identity.id)))
      LEFT JOIN core.auth_service_association association ON (((association.identity_id = identity.id) AND (association.date_dissociated IS NULL))))
-     LEFT JOIN user_account_api.current_auth_service_access_token current_active_access_token ON (((current_active_access_token.identity_id = identity.id) AND (current_active_access_token.date_revoked IS NULL))))
-     LEFT JOIN user_account_api.current_auth_service_integration_preference current_integration_preference ON ((current_integration_preference.identity_id = identity.id)));
+     LEFT JOIN user_account_api.current_auth_service_access_token current_active_access_token ON (((current_active_access_token.identity_id = identity.id) AND (current_active_access_token.date_revoked IS NULL))));
 
 
 --
@@ -6436,7 +6408,23 @@ BEGIN
         associate_auth_service_account.user_account_id,
         associate_auth_service_account.association_method::core.auth_service_association_method
     );
-     -- return from the view
+    -- update cached user_account.has_linked_twitter_account if this is a twitter account
+    IF (
+        SELECT
+            identity.provider = 'twitter'
+        FROM
+            auth_service_identity AS identity
+        WHERE
+            identity.id = associate_auth_service_account.identity_id
+    ) THEN
+        UPDATE
+            core.user_account
+        SET
+            has_linked_twitter_account = true
+        WHERE
+            user_account.id = associate_auth_service_account.user_account_id;
+    END IF;
+    -- return from the view
     RETURN QUERY
     SELECT
         *
@@ -6571,7 +6559,7 @@ CREATE TABLE core.auth_service_authentication (
     id bigint NOT NULL,
     date_authenticated timestamp without time zone DEFAULT core.utc_now() NOT NULL,
     identity_id bigint NOT NULL,
-    session_id text NOT NULL
+    session_id text
 );
 
 
@@ -6875,6 +6863,7 @@ CREATE TABLE core.user_account (
     loopback_alert_count integer DEFAULT 0 NOT NULL,
     post_alert_count integer DEFAULT 0 NOT NULL,
     follower_alert_count integer DEFAULT 0 NOT NULL,
+    has_linked_twitter_account boolean DEFAULT false NOT NULL,
     CONSTRAINT user_account_email_valid CHECK (((email)::text ~~ '%@%'::text)),
     CONSTRAINT user_account_name_valid CHECK (((name)::text ~ similar_escape('[A-Za-z0-9\-_]+'::text, NULL::text)))
 );
@@ -6914,6 +6903,71 @@ CREATE FUNCTION user_account_api.create_user_account(name text, email text, pass
 	    (SELECT id FROM new_user)
 	)
     SELECT * FROM new_user;
+$$;
+
+
+--
+-- Name: disassociate_auth_service_account(bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.disassociate_auth_service_account(identity_id bigint) RETURNS SETOF user_account_api.auth_service_account
+    LANGUAGE plpgsql
+    AS $$
+<<locals>>
+DECLARE
+    disassociated_user_account_id bigint;
+BEGIN
+    -- update the association
+    UPDATE
+        core.auth_service_association
+    SET
+        date_dissociated = core.utc_now()
+    WHERE
+        auth_service_association.identity_id = disassociate_auth_service_account.identity_id AND
+        auth_service_association.date_dissociated IS NULL
+    RETURNING
+        auth_service_association.user_account_id INTO locals.disassociated_user_account_id;
+    -- revoke access token if present
+    UPDATE
+        core.auth_service_access_token
+    SET
+        date_revoked = core.utc_now()
+    FROM
+        user_account_api.current_auth_service_access_token
+    WHERE
+        auth_service_access_token.identity_id = disassociate_auth_service_account.identity_id AND
+        auth_service_access_token.identity_id = current_auth_service_access_token.identity_id AND
+        auth_service_access_token.date_created = current_auth_service_access_token.date_created AND
+        auth_service_access_token.date_revoked IS NULL;
+    -- update cached user_account.has_linked_twitter_account if this was the last twitter account
+    IF (
+        NOT EXISTS (
+            SELECT
+                *
+            FROM
+                user_account_api.auth_service_account
+            WHERE
+                auth_service_account.associated_user_account_id = locals.disassociated_user_account_id AND
+                auth_service_account.provider = 'twitter'
+        )
+    )
+    THEN
+        UPDATE
+            core.user_account
+        SET
+            has_linked_twitter_account = false
+        WHERE
+            user_account.id = locals.disassociated_user_account_id;
+    END IF;
+    -- return from the view
+    RETURN QUERY
+    SELECT
+        *
+    FROM
+        user_account_api.auth_service_account AS account
+    WHERE
+        account.identity_id = disassociate_auth_service_account.identity_id;
+END;
 $$;
 
 
@@ -7166,81 +7220,6 @@ $$;
 
 
 --
--- Name: revoke_auth_service_access_token(text); Type: FUNCTION; Schema: user_account_api; Owner: -
---
-
-CREATE FUNCTION user_account_api.revoke_auth_service_access_token(token_value text) RETURNS SETOF core.auth_service_access_token
-    LANGUAGE sql
-    AS $$
-    UPDATE
-        core.auth_service_access_token
-    SET
-        date_revoked = core.utc_now()
-    WHERE
-        auth_service_access_token.token_value = revoke_auth_service_access_token.token_value
-    RETURNING
-        *;
-$$;
-
-
---
--- Name: set_auth_service_account_integration_preference(bigint, boolean); Type: FUNCTION; Schema: user_account_api; Owner: -
---
-
-CREATE FUNCTION user_account_api.set_auth_service_account_integration_preference(identity_id bigint, is_post_enabled boolean) RETURNS SETOF user_account_api.auth_service_account
-    LANGUAGE plpgsql
-    AS $$
-<<locals>>
-DECLARE
-    existing_preference_id bigint;
-BEGIN
-    -- check for an existing record
-	SELECT
-		preference.id
-    INTO
-    	locals.existing_preference_id
-    FROM
-    	core.auth_service_integration_preference AS preference
-    WHERE
-    	preference.identity_id = set_auth_service_account_integration_preference.identity_id AND
-    	preference.last_modified >= core.utc_now() - '1 hour'::interval
-    ORDER BY
-    	preference.last_modified DESC
-    LIMIT 1
-    FOR UPDATE;
-    -- update the existing record or create a new one
-    IF existing_preference_id IS NOT NULL THEN
-		UPDATE
-		    core.auth_service_integration_preference
-        SET
-            last_modified = core.utc_now(),
-            is_post_enabled = set_auth_service_account_integration_preference.is_post_enabled
-        WHERE
-        	id = locals.existing_preference_id;
-	ELSE
-    	INSERT INTO
-    	    core.auth_service_integration_preference (
-    	        identity_id,
-    	        is_post_enabled
-			)
-		VALUES (
-		    set_auth_service_account_integration_preference.identity_id,
-		    set_auth_service_account_integration_preference.is_post_enabled
-		);
-    END IF;
-    -- return from view
-    RETURN QUERY
-    SELECT
-        *
-    FROM
-        user_account_api.auth_service_account
-    WHERE
-        auth_service_account.identity_id = set_auth_service_account_integration_preference.identity_id;
-END;
-$$;
-
-
---
 -- Name: store_auth_service_access_token(bigint, bigint, text, text); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
@@ -7270,9 +7249,12 @@ BEGIN
             *;
     ELSE
         IF locals.current_token_value IS NOT NULL THEN
-            PERFORM user_account_api.revoke_auth_service_access_token(
-                token_value => locals.current_token_value
-            );
+            UPDATE
+                core.auth_service_access_token
+            SET
+                date_revoked = core.utc_now()
+            WHERE
+                auth_service_access_token.token_value = locals.current_token_value;
         END IF;
         RETURN QUERY
         INSERT INTO
@@ -7532,25 +7514,6 @@ CREATE SEQUENCE core.auth_service_identity_id_seq
 --
 
 ALTER SEQUENCE core.auth_service_identity_id_seq OWNED BY core.auth_service_identity.id;
-
-
---
--- Name: auth_service_integration_preference_id_seq; Type: SEQUENCE; Schema: core; Owner: -
---
-
-CREATE SEQUENCE core.auth_service_integration_preference_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: auth_service_integration_preference_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
---
-
-ALTER SEQUENCE core.auth_service_integration_preference_id_seq OWNED BY core.auth_service_integration_preference.id;
 
 
 --
@@ -8707,13 +8670,6 @@ ALTER TABLE ONLY core.auth_service_identity ALTER COLUMN id SET DEFAULT nextval(
 
 
 --
--- Name: auth_service_integration_preference id; Type: DEFAULT; Schema: core; Owner: -
---
-
-ALTER TABLE ONLY core.auth_service_integration_preference ALTER COLUMN id SET DEFAULT nextval('core.auth_service_integration_preference_id_seq'::regclass);
-
-
---
 -- Name: auth_service_post id; Type: DEFAULT; Schema: core; Owner: -
 --
 
@@ -9058,14 +9014,6 @@ ALTER TABLE ONLY core.auth_service_identity
 
 ALTER TABLE ONLY core.auth_service_identity
     ADD CONSTRAINT auth_service_identity_provider_provider_user_id_key UNIQUE (provider, provider_user_id);
-
-
---
--- Name: auth_service_integration_preference auth_service_integration_preference_pkey; Type: CONSTRAINT; Schema: core; Owner: -
---
-
-ALTER TABLE ONLY core.auth_service_integration_preference
-    ADD CONSTRAINT auth_service_integration_preference_pkey PRIMARY KEY (id);
 
 
 --
@@ -9786,14 +9734,6 @@ ALTER TABLE ONLY core.auth_service_association
 
 ALTER TABLE ONLY core.auth_service_authentication
     ADD CONSTRAINT auth_service_authentication_identity_id_fkey FOREIGN KEY (identity_id) REFERENCES core.auth_service_identity(id);
-
-
---
--- Name: auth_service_integration_preference auth_service_integration_preference_identity_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
---
-
-ALTER TABLE ONLY core.auth_service_integration_preference
-    ADD CONSTRAINT auth_service_integration_preference_identity_id_fkey FOREIGN KEY (identity_id) REFERENCES core.auth_service_identity(id);
 
 
 --

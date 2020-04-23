@@ -1914,6 +1914,21 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
         SELECT
             core.utc_now() - '1 month'::interval - ('10 minutes'::interval) AS cutoff_date
     ),
+    scorable_article AS (
+        SELECT DISTINCT
+            article_id AS id
+        FROM
+            core.comment
+        WHERE
+            comment.date_created >= (SELECT cutoff_date FROM scorable_criteria)
+        UNION
+        SELECT DISTINCT
+            article_id AS id
+        FROM
+            core.user_article
+        WHERE
+            user_article.date_completed >= (SELECT cutoff_date FROM scorable_criteria)
+    ),
 	scored_article AS (
 		SELECT
 			community_read.id,
@@ -1932,8 +1947,8 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
                 ) /
 			    (
                     CASE
-                        -- divide articles from billloundy.com, blog.readup.com and billloundy.substack.com by 10
-                        WHEN community_read.source_id IN (7038, 48542, 63802)
+                        -- divide articles by Bill Loundy (id # 49) by 10
+                        WHEN 49 = ANY(article_authors.author_ids)
                         THEN 10
                         ELSE 1
                     END
@@ -1951,23 +1966,21 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
                 (coalesce(community_read.average_rating_score, 5) / 5)
 			) AS top_score
 		FROM
-		    community_reads.community_read JOIN
-			(
-				SELECT DISTINCT
-				    article_id AS id
-				FROM
-				    core.comment
-				WHERE
-				    comment.date_created >= (SELECT cutoff_date FROM scorable_criteria)
-				UNION
-				SELECT DISTINCT
-				    article_id AS id
-				FROM
-				    core.user_article
-				WHERE
-				    user_article.date_completed >= (SELECT cutoff_date FROM scorable_criteria)
-			) AS scorable_article ON
-		        community_read.id = scorable_article.id
+		    community_reads.community_read
+		    JOIN scorable_article ON
+		        scorable_article.id = community_read.id
+		    LEFT JOIN (
+		        SELECT
+		            article_author.article_id,
+		            array_agg(article_author.author_id) AS author_ids
+		        FROM
+		            core.article_author
+		            JOIN scorable_article ON
+		                scorable_article.id = article_author.article_id
+		        GROUP BY
+		            article_author.article_id
+            ) AS article_authors ON
+                article_authors.article_id = community_read.id
 			LEFT JOIN (
 				SELECT
 					count(first_user_comment.*) AS count,
@@ -1989,6 +2002,8 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
 						utc_now() - first_user_comment.date_created AS age
 					FROM
 						core.comment AS first_user_comment
+						JOIN scorable_article ON
+						    scorable_article.id = first_user_comment.article_id
 				    	LEFT JOIN core.comment AS earlier_user_comment ON (
 				    		earlier_user_comment.article_id = first_user_comment.article_id AND
 				    		earlier_user_comment.user_account_id = first_user_comment.user_account_id AND
@@ -2022,6 +2037,8 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
 						utc_now() - user_article.date_completed AS age
 					FROM
 					    core.user_article
+                        JOIN scorable_article ON
+                            scorable_article.id = user_article.article_id
 					WHERE
 					    user_article.date_completed IS NOT NULL
 				) AS read

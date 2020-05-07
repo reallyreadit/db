@@ -586,6 +586,35 @@ CREATE TYPE stats.streak_ranking AS (
 
 
 --
+-- Name: get_article_issue_reports(timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: analytics; Owner: -
+--
+
+CREATE FUNCTION analytics.get_article_issue_reports(start_date timestamp without time zone, end_date timestamp without time zone) RETURNS TABLE(date_created timestamp without time zone, article_url text, article_aotd_contender_rank integer, user_name text, issue text, client_type text)
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT
+        report.date_created,
+        page.url,
+        article.aotd_contender_rank,
+        user_account.name::text,
+        report.issue,
+        report.analytics->'client'->>'type'
+    FROM
+        core.article_issue_report AS report
+        JOIN core.article ON
+            article.id = report.article_id
+        LEFT JOIN core.page ON
+            page.article_id = report.article_id
+        JOIN core.user_account ON
+            user_account.id = report.user_account_id
+    WHERE
+        report.date_created <@ tsrange(get_article_issue_reports.start_date, get_article_issue_reports.end_date)
+    ORDER BY
+        report.date_created DESC;
+$$;
+
+
+--
 -- Name: get_conversions(timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: analytics; Owner: -
 --
 
@@ -997,6 +1026,29 @@ CREATE FUNCTION analytics.get_signups(start_date timestamp without time zone, en
     	user_account.date_created <@ tsrange(get_signups.start_date, get_signups.end_date)
     ORDER BY
     	user_account.date_created DESC
+$$;
+
+
+--
+-- Name: log_article_issue_report(bigint, bigint, text, text); Type: FUNCTION; Schema: analytics; Owner: -
+--
+
+CREATE FUNCTION analytics.log_article_issue_report(article_id bigint, user_account_id bigint, issue text, analytics text) RETURNS void
+    LANGUAGE sql
+    AS $$
+    INSERT INTO
+        core.article_issue_report (
+            article_id,
+            user_account_id,
+            issue,
+            analytics
+        )
+    VALUES (
+        log_article_issue_report.article_id,
+        log_article_issue_report.user_account_id,
+        log_article_issue_report.issue,
+        log_article_issue_report.analytics::jsonb
+    );
 $$;
 
 
@@ -7496,6 +7548,39 @@ ALTER SEQUENCE core.article_id_seq OWNED BY core.article.id;
 
 
 --
+-- Name: article_issue_report; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.article_issue_report (
+    id bigint NOT NULL,
+    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    article_id bigint NOT NULL,
+    user_account_id bigint NOT NULL,
+    issue text NOT NULL,
+    analytics jsonb
+);
+
+
+--
+-- Name: article_issue_report_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.article_issue_report_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: article_issue_report_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.article_issue_report_id_seq OWNED BY core.article_issue_report.id;
+
+
+--
 -- Name: auth_service_authentication_id_seq; Type: SEQUENCE; Schema: core; Owner: -
 --
 
@@ -8673,6 +8758,13 @@ ALTER TABLE ONLY core.article ALTER COLUMN id SET DEFAULT nextval('core.article_
 
 
 --
+-- Name: article_issue_report id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.article_issue_report ALTER COLUMN id SET DEFAULT nextval('core.article_issue_report_id_seq'::regclass);
+
+
+--
 -- Name: auth_service_authentication id; Type: DEFAULT; Schema: core; Owner: -
 --
 
@@ -8951,6 +9043,14 @@ ALTER TABLE ONLY core.user_article_progress ALTER COLUMN id SET DEFAULT nextval(
 
 ALTER TABLE ONLY core.article_author
     ADD CONSTRAINT article_author_pkey PRIMARY KEY (article_id, author_id);
+
+
+--
+-- Name: article_issue_report article_issue_report_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.article_issue_report
+    ADD CONSTRAINT article_issue_report_pkey PRIMARY KEY (id);
 
 
 --
@@ -9679,6 +9779,22 @@ ALTER TABLE ONLY core.article_author
 
 ALTER TABLE ONLY core.article_author
     ADD CONSTRAINT article_author_author_id_fkey FOREIGN KEY (author_id) REFERENCES core.author(id);
+
+
+--
+-- Name: article_issue_report article_issue_report_article_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.article_issue_report
+    ADD CONSTRAINT article_issue_report_article_id_fkey FOREIGN KEY (article_id) REFERENCES core.article(id);
+
+
+--
+-- Name: article_issue_report article_issue_report_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.article_issue_report
+    ADD CONSTRAINT article_issue_report_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
 
 
 --

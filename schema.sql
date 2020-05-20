@@ -1643,6 +1643,38 @@ $$;
 
 
 --
+-- Name: article_image; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.article_image (
+    article_id bigint NOT NULL,
+    date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    creator_user_id bigint NOT NULL,
+    url text NOT NULL
+);
+
+
+--
+-- Name: get_article_image(bigint); Type: FUNCTION; Schema: article_api; Owner: -
+--
+
+CREATE FUNCTION article_api.get_article_image(article_id bigint) RETURNS SETOF core.article_image
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT
+        *
+    FROM
+        core.article_image
+    WHERE
+        article_image.article_id = get_article_image.article_id
+    ORDER BY
+        article_image.date_created DESC
+    LIMIT
+        1;
+$$;
+
+
+--
 -- Name: get_articles(bigint, bigint[]); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
@@ -2121,6 +2153,28 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
             scored_article.id = aotd_contender.id
 	WHERE
 	    scored_article.id = article.id;
+$$;
+
+
+--
+-- Name: set_article_image(bigint, bigint, text); Type: FUNCTION; Schema: article_api; Owner: -
+--
+
+CREATE FUNCTION article_api.set_article_image(article_id bigint, creator_user_id bigint, url text) RETURNS SETOF core.article_image
+    LANGUAGE sql
+    AS $$
+    INSERT INTO core.article_image (
+        article_id,
+        creator_user_id,
+        url
+    )
+    VALUES (
+        set_article_image.article_id,
+        set_article_image.creator_user_id,
+        set_article_image.url
+    )
+    RETURNING
+        *;
 $$;
 
 
@@ -9046,6 +9100,14 @@ ALTER TABLE ONLY core.article_author
 
 
 --
+-- Name: article_image article_image_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.article_image
+    ADD CONSTRAINT article_image_pkey PRIMARY KEY (article_id, url);
+
+
+--
 -- Name: article_issue_report article_issue_report_pkey; Type: CONSTRAINT; Schema: core; Owner: -
 --
 
@@ -9779,6 +9841,22 @@ ALTER TABLE ONLY core.article_author
 
 ALTER TABLE ONLY core.article_author
     ADD CONSTRAINT article_author_author_id_fkey FOREIGN KEY (author_id) REFERENCES core.author(id);
+
+
+--
+-- Name: article_image article_image_article_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.article_image
+    ADD CONSTRAINT article_image_article_id_fkey FOREIGN KEY (article_id) REFERENCES core.article(id);
+
+
+--
+-- Name: article_image article_image_creator_user_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.article_image
+    ADD CONSTRAINT article_image_creator_user_id_fkey FOREIGN KEY (creator_user_id) REFERENCES core.user_account(id);
 
 
 --

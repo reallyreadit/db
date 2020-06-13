@@ -30,6 +30,13 @@ CREATE SCHEMA article_api;
 
 
 --
+-- Name: authors; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA authors;
+
+
+--
 -- Name: community_reads; Type: SCHEMA; Schema: -; Owner: -
 --
 
@@ -168,6 +175,17 @@ CREATE TYPE article_api.article_page_result AS (
 	flair core.article_flair,
 	aotd_contender_rank integer,
 	total_count bigint
+);
+
+
+--
+-- Name: author_metadata; Type: TYPE; Schema: article_api; Owner: -
+--
+
+CREATE TYPE article_api.author_metadata AS (
+	name text,
+	url text,
+	slug text
 );
 
 
@@ -1270,38 +1288,6 @@ $$;
 
 
 --
--- Name: author; Type: TABLE; Schema: core; Owner: -
---
-
-CREATE TABLE core.author (
-    id bigint NOT NULL,
-    name text NOT NULL,
-    url text,
-    twitter_handle text,
-    twitter_handle_assignment core.twitter_handle_assignment DEFAULT 'none'::core.twitter_handle_assignment NOT NULL
-);
-
-
---
--- Name: assign_twitter_handle_to_author(bigint, text, text); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.assign_twitter_handle_to_author(author_id bigint, twitter_handle text, twitter_handle_assignment text) RETURNS SETOF core.author
-    LANGUAGE sql
-    AS $$
-    UPDATE
-        core.author
-    SET
-        twitter_handle = assign_twitter_handle_to_author.twitter_handle,
-        twitter_handle_assignment = assign_twitter_handle_to_author.twitter_handle_assignment::core.twitter_handle_assignment
-    WHERE
-        author.id = assign_twitter_handle_to_author.author_id
-    RETURNING
-        *;
-$$;
-
-
---
 -- Name: source; Type: TABLE; Schema: core; Owner: -
 --
 
@@ -1336,15 +1322,16 @@ $$;
 
 
 --
--- Name: create_article(text, text, bigint, timestamp without time zone, timestamp without time zone, text, text, text[], text[], text[]); Type: FUNCTION; Schema: article_api; Owner: -
+-- Name: create_article(text, text, bigint, timestamp without time zone, timestamp without time zone, text, text, article_api.author_metadata[], text[]); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
-CREATE FUNCTION article_api.create_article(title text, slug text, source_id bigint, date_published timestamp without time zone, date_modified timestamp without time zone, section text, description text, author_names text[], author_urls text[], tags text[]) RETURNS bigint
+CREATE FUNCTION article_api.create_article(title text, slug text, source_id bigint, date_published timestamp without time zone, date_modified timestamp without time zone, section text, description text, authors article_api.author_metadata[], tags text[]) RETURNS bigint
     LANGUAGE plpgsql
     AS $$
 <<locals>>
 DECLARE
 	article_id bigint;
+    current_author article_api.author_metadata;
 	current_author_id bigint;
 	current_tag text;
 	current_tag_id bigint;
@@ -1372,7 +1359,7 @@ BEGIN
 	    id
 	INTO
 	    locals.article_id;
-	FOR i IN 1..coalesce(array_length(create_article.author_names, 1), 0) LOOP
+	FOREACH locals.current_author IN ARRAY create_article.authors LOOP
 		SELECT
 		    author.id
 		INTO
@@ -1380,16 +1367,19 @@ BEGIN
 		FROM
 		    core.author
 		WHERE
-		    lower(author.name) = lower(create_article.author_names[i]);
+		    author.slug = locals.current_author.slug
+		FOR UPDATE;
 		IF locals.current_author_id IS NULL THEN
 			INSERT INTO
 			    core.author (
                     name,
-                    url
+                    url,
+                    slug
                 )
 			VALUES (
-			    create_article.author_names[i],
-			    create_article.author_urls[i]
+			    locals.current_author.name,
+			    locals.current_author.url,
+			    locals.current_author.slug
 			)
 			RETURNING
 			    id
@@ -1762,24 +1752,6 @@ CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC articl
 			ON first_poster.id = article.first_poster_id
 	ORDER BY
 	    array_position(article_ids, article.id)
-$$;
-
-
---
--- Name: get_authors_of_article(bigint); Type: FUNCTION; Schema: article_api; Owner: -
---
-
-CREATE FUNCTION article_api.get_authors_of_article(article_id bigint) RETURNS SETOF core.author
-    LANGUAGE sql STABLE
-    AS $$
-    SELECT
-        author.*
-    FROM
-        core.article_author
-        JOIN core.author ON
-            author.id = article_author.author_id
-    WHERE
-        article_author.article_id = get_authors_of_article.article_id;
 $$;
 
 
@@ -2338,6 +2310,73 @@ $$;
 
 
 --
+-- Name: author; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.author (
+    id bigint NOT NULL,
+    name text NOT NULL,
+    url text,
+    twitter_handle text,
+    twitter_handle_assignment core.twitter_handle_assignment DEFAULT 'none'::core.twitter_handle_assignment NOT NULL,
+    slug text NOT NULL
+);
+
+
+--
+-- Name: assign_twitter_handle_to_author(bigint, text, text); Type: FUNCTION; Schema: authors; Owner: -
+--
+
+CREATE FUNCTION authors.assign_twitter_handle_to_author(author_id bigint, twitter_handle text, twitter_handle_assignment text) RETURNS SETOF core.author
+    LANGUAGE sql
+    AS $$
+    UPDATE
+        core.author
+    SET
+        twitter_handle = assign_twitter_handle_to_author.twitter_handle,
+        twitter_handle_assignment = assign_twitter_handle_to_author.twitter_handle_assignment::core.twitter_handle_assignment
+    WHERE
+        author.id = assign_twitter_handle_to_author.author_id
+    RETURNING
+        *;
+$$;
+
+
+--
+-- Name: get_author(text); Type: FUNCTION; Schema: authors; Owner: -
+--
+
+CREATE FUNCTION authors.get_author(slug text) RETURNS SETOF core.author
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT
+        author.*
+    FROM
+        core.author
+    WHERE
+        author.slug = get_author.slug;
+$$;
+
+
+--
+-- Name: get_authors_of_article(bigint); Type: FUNCTION; Schema: authors; Owner: -
+--
+
+CREATE FUNCTION authors.get_authors_of_article(article_id bigint) RETURNS SETOF core.author
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT
+        author.*
+    FROM
+        core.article_author
+        JOIN core.author ON
+            author.id = article_author.author_id
+    WHERE
+        article_author.article_id = get_authors_of_article.article_id;
+$$;
+
+
+--
 -- Name: get_aotd_history(bigint, integer, integer, integer, integer); Type: FUNCTION; Schema: community_reads; Owner: -
 --
 
@@ -2409,6 +2448,59 @@ CREATE FUNCTION community_reads.get_aotds(user_account_id bigint, day_count inte
 			LIMIT get_aotds.day_count
 		)
 	);
+$$;
+
+
+--
+-- Name: get_articles_by_author_slug(text, bigint, integer, integer, integer, integer); Type: FUNCTION; Schema: community_reads; Owner: -
+--
+
+CREATE FUNCTION community_reads.get_articles_by_author_slug(slug text, user_account_id bigint, page_number integer, page_size integer, min_length integer, max_length integer) RETURNS SETOF article_api.article_page_result
+    LANGUAGE sql STABLE
+    AS $$
+    WITH author_article AS (
+        SELECT
+            community_read.id,
+            community_read.date_published
+        FROM
+        	community_reads.community_read
+            JOIN core.article_author ON
+                article_author.article_id = community_read.id
+            JOIN core.author ON
+                author.id = article_author.author_id AND
+                author.slug = get_articles_by_author_slug.slug
+        WHERE
+			core.matches_article_length(
+				community_read.word_count,
+			    get_articles_by_author_slug.min_length,
+			    get_articles_by_author_slug.max_length
+			)
+	)
+    SELECT
+    	articles.*,
+		(
+		    SELECT
+		        count(*)
+		    FROM
+		        author_article
+		)
+    FROM
+		article_api.get_articles(
+			user_account_id,
+			VARIADIC ARRAY(
+				SELECT
+					author_article.id
+				FROM
+					author_article
+				ORDER BY
+					author_article.date_published DESC NULLS LAST,
+				    author_article.id DESC
+				OFFSET
+					(get_articles_by_author_slug.page_number - 1) * get_articles_by_author_slug.page_size
+				LIMIT
+					get_articles_by_author_slug.page_size
+			)
+		) AS articles;
 $$;
 
 
@@ -9241,6 +9333,14 @@ ALTER TABLE ONLY core.auth_service_user
 
 ALTER TABLE ONLY core.author
     ADD CONSTRAINT author_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: author author_slug_key; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.author
+    ADD CONSTRAINT author_slug_key UNIQUE (slug);
 
 
 --

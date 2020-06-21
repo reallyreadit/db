@@ -1915,8 +1915,6 @@ CREATE FUNCTION article_api.rate_article(article_id bigint, user_account_id bigi
 <<locals>>
 DECLARE
     new_rating core.rating;
-    average_score numeric;
-    rating_count int;
 BEGIN
     -- insert the new rating
     INSERT INTO
@@ -1934,25 +1932,36 @@ BEGIN
 		*
 	INTO
 		locals.new_rating;
-    -- select the updated rating stats
-    SELECT
-		avg(current_rating.score),
-        count(*)
-    INTO
-    	locals.average_score,
-        locals.rating_count
-	FROM
-		article_api.user_article_rating AS current_rating
-	WHERE
-		current_rating.article_id = rate_article.article_id;
-    -- cache the updated rating stats in article
+    -- cache the updated article rating stats and set the community_read_timestamp if necessary
     UPDATE
 		core.article
 	SET
-		average_rating_score = locals.average_score,
-		rating_count = locals.rating_count
+		average_rating_score = current_rating_stats.average_rating_score,
+		rating_count = current_rating_stats.rating_count,
+	    community_read_timestamp = (
+	        CASE WHEN
+	            article.community_read_timestamp IS NULL
+	        THEN
+	            core.utc_now()
+	        ELSE
+	            article.community_read_timestamp
+	        END
+        )
+    FROM
+        (
+            SELECT
+                current_rating.article_id,
+                avg(current_rating.score) AS average_rating_score,
+                count(*) AS rating_count
+            FROM
+                article_api.user_article_rating AS current_rating
+            WHERE
+                current_rating.article_id = rate_article.article_id
+            GROUP BY
+                current_rating.article_id
+        ) AS current_rating_stats
 	WHERE
-		article.id = rate_article.article_id;
+		article.id = current_rating_stats.article_id;
     -- return the new rating
     RETURN NEXT locals.new_rating;
 END;
@@ -2217,9 +2226,12 @@ DECLARE
    	utc_now CONSTANT timestamp NOT NULL := utc_now();
    	-- calculate the words read from the read state
 	words_read CONSTANT int NOT NULL := (
-		SELECT sum(n)
-		FROM unnest(read_state) AS n
-		WHERE n > 0
+		SELECT
+		    sum(n)
+		FROM
+		    unnest(update_read_progress.read_state) AS n
+		WHERE
+		    n > 0
 	);
 	-- local user_article
 	current_user_article user_article;
@@ -2227,64 +2239,92 @@ DECLARE
 	words_read_since_last_commit int;
 BEGIN
     -- read and lock the existing user_article
-	SELECT *
-	INTO locals.current_user_article
-	FROM user_article
-	WHERE user_article.id = update_read_progress.user_article_id
+	SELECT
+	    *
+	INTO
+	    locals.current_user_article
+	FROM
+	    core.user_article
+	WHERE
+	    user_article.id = update_read_progress.user_article_id
 	FOR UPDATE;
 	-- only update if more words have been read
-	IF locals.words_read > locals.current_user_article.words_read
-	THEN
+	IF locals.words_read > locals.current_user_article.words_read THEN
 	   	-- calculate the words read since the last commit
-	   	words_read_since_last_commit = locals.words_read - current_user_article.words_read;
+	   	locals.words_read_since_last_commit = locals.words_read - locals.current_user_article.words_read;
 		-- update the progress
-	   	INSERT INTO user_article_progress
-			(user_account_id, article_id, period, words_read, client_type)
-	   	VALUES
-	   	(
+	   	INSERT INTO
+	   	    core.user_article_progress (
+	   	        user_account_id,
+	   	        article_id,
+	   	        period,
+	   	        words_read,
+	   	        client_type
+	   	    )
+	   	VALUES (
 	   		locals.current_user_article.user_account_id,
 	   	 	locals.current_user_article.article_id,
-				(
-					date_trunc('hour', locals.utc_now) +
-					make_interval(mins => floor(extract('minute' FROM locals.utc_now) / 15)::int * 15)
-				),
-	   		words_read_since_last_commit,
+            (
+                date_trunc('hour', locals.utc_now) +
+                make_interval(mins => floor(extract('minute' FROM locals.utc_now) / 15)::int * 15)
+            ),
+	   		locals.words_read_since_last_commit,
 	   		update_read_progress.analytics::json->'client'->'type'
 		)
-		ON CONFLICT
-		   (user_account_id, article_id, period)
-		DO UPDATE
-			SET words_read = user_article_progress.words_read + words_read_since_last_commit;
+		ON CONFLICT (
+		    user_account_id,
+		    article_id,
+		    period
+		)
+		DO UPDATE SET
+		    words_read = user_article_progress.words_read + locals.words_read_since_last_commit;
 	  	-- update the user_article
-		UPDATE user_article
+		UPDATE
+		    core.user_article
 		SET
 			read_state = update_read_progress.read_state,
 			words_read = locals.words_read,
 			last_modified = locals.utc_now,
 			analytics = update_read_progress.analytics::json
-		WHERE user_article.id = update_read_progress.user_article_id
-		RETURNING *
-		INTO locals.current_user_article;
+		WHERE
+		    user_article.id = update_read_progress.user_article_id
+		RETURNING
+		    *
+		INTO
+		    locals.current_user_article;
 		-- check if this update completed the page
 		IF
 			locals.current_user_article.date_completed IS NULL AND
-			(
-				SELECT article_api.get_percent_complete(
-					locals.current_user_article.readable_word_count,
-					locals.words_read
-				) >= 90
-			)
+			article_api.get_percent_complete(locals.current_user_article.readable_word_count, locals.words_read) >= 90
 		THEN
 			-- set date_completed
-			UPDATE user_article
-			SET date_completed = user_article.last_modified
-			WHERE user_article.id = update_read_progress.user_article_id
-			RETURNING *
-			INTO locals.current_user_article;
-			-- update the cached article read count
-			UPDATE article
-			SET read_count = read_count + 1
-			WHERE id = locals.current_user_article.article_id;
+			UPDATE
+			    core.user_article
+			SET
+			    date_completed = user_article.last_modified
+			WHERE
+			    user_article.id = update_read_progress.user_article_id
+			RETURNING
+			    *
+			INTO
+			    locals.current_user_article;
+			-- update the cached article read count and set community_read_timestamp if necessary
+			UPDATE
+			    core.article
+			SET
+			    read_count = article.read_count + 1,
+			    community_read_timestamp = (
+			        CASE WHEN
+			            article.community_read_timestamp IS NULL AND
+			            article.read_count = 1
+			        THEN
+			            locals.utc_now
+			        ELSE
+			            article.community_read_timestamp
+			        END
+                )
+			WHERE
+			    article.id = locals.current_user_article.article_id;
 		END IF;
 	END IF;
 	-- return
@@ -2560,63 +2600,6 @@ $$;
 
 
 --
--- Name: get_highest_rated(bigint, integer, integer, timestamp without time zone, integer, integer); Type: FUNCTION; Schema: community_reads; Owner: -
---
-
-CREATE FUNCTION community_reads.get_highest_rated(user_account_id bigint, page_number integer, page_size integer, since_date timestamp without time zone, min_length integer, max_length integer) RETURNS SETOF article_api.article_page_result
-    LANGUAGE sql STABLE
-    AS $$
-    WITH highest_rated AS (
-		SELECT
-			community_read.id,
-			avg(user_article_rating.score) AS average_rating_score
-		FROM
-			community_reads.community_read
-			JOIN article_api.user_article_rating ON user_article_rating.article_id = community_read.id
-		WHERE
-			since_date IS NOT NULL AND
-			user_article_rating.timestamp >= since_date AND
-		    core.matches_article_length(
-				word_count,
-				min_length,
-				max_length
-			)
-		GROUP BY
-			community_read.id
-		UNION ALL
-		SELECT
-			id,
-			average_rating_score
-		FROM community_reads.community_read
-		WHERE
-			since_date IS NULL AND
-			average_rating_score IS NOT NULL AND
-		    core.matches_article_length(
-				word_count,
-				min_length,
-				max_length
-			)
-	)
-    SELECT
-    	articles.*,
-		(
-		    SELECT count(*)
-		    FROM highest_rated
-		) AS total_count
-    FROM article_api.get_articles(
-        user_account_id,
-		VARIADIC ARRAY(
-			SELECT id
-			FROM highest_rated
-			ORDER BY average_rating_score DESC
-			OFFSET (page_number - 1) * page_size
-			LIMIT page_size
-		)
-	) AS articles;
-$$;
-
-
---
 -- Name: get_hot(bigint, integer, integer, integer, integer); Type: FUNCTION; Schema: community_reads; Owner: -
 --
 
@@ -2667,116 +2650,50 @@ $$;
 
 
 --
--- Name: get_most_commented(bigint, integer, integer, timestamp without time zone, integer, integer); Type: FUNCTION; Schema: community_reads; Owner: -
+-- Name: get_new_aotd_contenders(bigint, integer, integer, integer, integer); Type: FUNCTION; Schema: community_reads; Owner: -
 --
 
-CREATE FUNCTION community_reads.get_most_commented(user_account_id bigint, page_number integer, page_size integer, since_date timestamp without time zone, min_length integer, max_length integer) RETURNS SETOF article_api.article_page_result
+CREATE FUNCTION community_reads.get_new_aotd_contenders(user_account_id bigint, page_number integer, page_size integer, min_length integer, max_length integer) RETURNS SETOF article_api.article_page_result
     LANGUAGE sql STABLE
     AS $$
-    WITH most_commented AS (
-		SELECT
-			community_read.id,
-			count(*) AS comment_count
-		FROM
-			community_reads.community_read
-			JOIN comment ON comment.article_id = community_read.id
-		WHERE
-			since_date IS NOT NULL AND
-			comment.date_created >= since_date AND
-		    core.matches_article_length(
-				word_count,
-				min_length,
-				max_length
-			)
-		GROUP BY
-			community_read.id
-		UNION ALL
-		SELECT
-			id,
-			comment_count
-		FROM community_reads.community_read
-		WHERE
-			since_date IS NULL AND
-			comment_count > 0 AND
-		    core.matches_article_length(
-				word_count,
-				min_length,
-				max_length
-			)
-	)
-    SELECT
-    	articles.*,
-		(
-		    SELECT count(*)
-		    FROM most_commented
-		) AS total_count
-    FROM article_api.get_articles(
-        user_account_id,
-		VARIADIC ARRAY(
-			SELECT id
-			FROM most_commented
-			ORDER BY comment_count DESC
-			OFFSET (page_number - 1) * page_size
-			LIMIT page_size
-		)
-	) AS articles;
-$$;
-
-
---
--- Name: get_most_read(bigint, integer, integer, timestamp without time zone, integer, integer); Type: FUNCTION; Schema: community_reads; Owner: -
---
-
-CREATE FUNCTION community_reads.get_most_read(user_account_id bigint, page_number integer, page_size integer, since_date timestamp without time zone, min_length integer, max_length integer) RETURNS SETOF article_api.article_page_result
-    LANGUAGE sql STABLE
-    AS $$
-    WITH most_read AS (
-		SELECT
-			community_read.id,
-			count(*) AS read_count
-		FROM
-			community_reads.community_read
-			JOIN user_article ON user_article.article_id = community_read.id
-		WHERE
-			since_date IS NOT NULL AND
-			user_article.date_completed >= since_date AND
-		    core.matches_article_length(
+    WITH aotd_contender AS (
+        SELECT
+            community_read.id,
+            community_read.community_read_timestamp
+        FROM
+        	community_reads.community_read
+        WHERE
+        	community_read.aotd_timestamp IS NULL AND
+			core.matches_article_length(
 				community_read.word_count,
-				min_length,
-				max_length
-			)
-		GROUP BY
-			community_read.id
-		UNION ALL
-		SELECT
-			id,
-			read_count
-		FROM community_reads.community_read
-		WHERE
-			since_date IS NULL AND
-			read_count > 0 AND
-		    core.matches_article_length(
-				word_count,
-				min_length,
-				max_length
+			    get_new_aotd_contenders.min_length,
+			    get_new_aotd_contenders.max_length
 			)
 	)
     SELECT
     	articles.*,
 		(
-		    SELECT count(*)
-		    FROM most_read
+		    SELECT
+		        count(*)
+		    FROM
+		        aotd_contender
 		) AS total_count
-    FROM article_api.get_articles(
-        user_account_id,
-		VARIADIC ARRAY(
-			SELECT id
-			FROM most_read
-			ORDER BY read_count DESC
-			OFFSET (page_number - 1) * page_size
-			LIMIT page_size
-		)
-	) AS articles;
+    FROM
+		article_api.get_articles(
+			get_new_aotd_contenders.user_account_id,
+			VARIADIC ARRAY(
+				SELECT
+					aotd_contender.id
+				FROM
+					aotd_contender
+				ORDER BY
+					aotd_contender.community_read_timestamp DESC
+				OFFSET
+					(get_new_aotd_contenders.page_number - 1) * get_new_aotd_contenders.page_size
+				LIMIT
+					get_new_aotd_contenders.page_size
+			)
+		) AS articles;
 $$;
 
 
@@ -5115,23 +5032,35 @@ BEGIN
 		create_comment.analytics::json
 	)
 	RETURNING
-		id INTO locals.comment_id;
-    -- update cached article columns
+		id
+	INTO
+	    locals.comment_id;
+    -- update cached article columns and set community_read_timestamp if necessary
     UPDATE
 		core.article
 	SET
-		comment_count = comment_count + 1,
+		comment_count = article.comment_count + 1,
 		first_poster_id = (
 			CASE WHEN
-				first_poster_id IS NULL AND create_comment.parent_comment_id IS NULL
+				article.first_poster_id IS NULL AND
+				create_comment.parent_comment_id IS NULL
 			THEN
 				create_comment.user_account_id
 			ELSE
-				first_poster_id
+				article.first_poster_id
 			END
-		)
+		),
+	    community_read_timestamp = (
+	        CASE WHEN
+	            article.community_read_timestamp IS NULL
+	        THEN
+	            core.utc_now()
+	        ELSE
+	            article.community_read_timestamp
+	        END
+        )
 	WHERE
-		id = create_comment.article_id;
+		article.id = create_comment.article_id;
     -- return the new comment from the view
     RETURN QUERY
 	SELECT
@@ -5139,7 +5068,7 @@ BEGIN
 	FROM
 		social.comment
 	WHERE
-	    id = locals.comment_id;
+	    comment.id = locals.comment_id;
 END;
 $$;
 
@@ -5231,25 +5160,36 @@ CREATE TABLE core.silent_post (
 --
 
 CREATE FUNCTION social.create_silent_post(user_account_id bigint, article_id bigint, analytics text) RETURNS SETOF core.silent_post
-    LANGUAGE sql
+    LANGUAGE plpgsql
     AS $$
-    WITH cache_post AS (
-        UPDATE
-			core.article
-		SET
-			silent_post_count = silent_post_count + 1,
-		    first_poster_id = (
-		        CASE WHEN
-		            first_poster_id IS NULL
-		        THEN
-		            create_silent_post.user_account_id
-		        ELSE
-		            first_poster_id
-		        END
-			)
-		WHERE
-			id = create_silent_post.article_id
-	)
+BEGIN
+    -- update cached article columns and set community_read_timestamp if necessary
+    UPDATE
+        core.article
+    SET
+        silent_post_count = article.silent_post_count + 1,
+        first_poster_id = (
+            CASE WHEN
+                article.first_poster_id IS NULL
+            THEN
+                create_silent_post.user_account_id
+            ELSE
+                article.first_poster_id
+            END
+        ),
+        community_read_timestamp = (
+            CASE WHEN
+                article.community_read_timestamp IS NULL
+            THEN
+                core.utc_now()
+            ELSE
+                article.community_read_timestamp
+            END
+        )
+    WHERE
+        article.id = create_silent_post.article_id;
+    -- insert and return silent_post
+    RETURN QUERY
     INSERT INTO
         core.silent_post (
     		article_id,
@@ -5262,7 +5202,8 @@ CREATE FUNCTION social.create_silent_post(user_account_id bigint, article_id big
 		create_silent_post.analytics::jsonb
 	)
 	RETURNING
-	    *
+	    *;
+END;
 $$;
 
 
@@ -7699,7 +7640,8 @@ CREATE TABLE core.article (
     rating_count integer DEFAULT 0 NOT NULL,
     first_poster_id bigint,
     flair core.article_flair,
-    aotd_contender_rank integer DEFAULT 0 NOT NULL
+    aotd_contender_rank integer DEFAULT 0 NOT NULL,
+    community_read_timestamp timestamp without time zone
 );
 
 
@@ -7717,9 +7659,10 @@ CREATE VIEW community_reads.community_read AS
     article.read_count,
     article.average_rating_score,
     article.date_published,
-    article.source_id
+    article.source_id,
+    article.community_read_timestamp
    FROM core.article
-  WHERE ((article.comment_count > 0) OR (article.read_count > 1) OR (article.average_rating_score IS NOT NULL) OR (article.silent_post_count > 0));
+  WHERE (article.community_read_timestamp IS NOT NULL);
 
 
 --
@@ -9775,17 +9718,10 @@ CREATE INDEX article_aotd_timestamp_idx ON core.article USING btree (aotd_timest
 
 
 --
--- Name: article_average_rating_score_idx; Type: INDEX; Schema: core; Owner: -
+-- Name: article_community_read_timestamp_idx; Type: INDEX; Schema: core; Owner: -
 --
 
-CREATE INDEX article_average_rating_score_idx ON core.article USING btree (average_rating_score DESC);
-
-
---
--- Name: article_comment_count_idx; Type: INDEX; Schema: core; Owner: -
---
-
-CREATE INDEX article_comment_count_idx ON core.article USING btree (comment_count DESC);
+CREATE INDEX article_community_read_timestamp_idx ON core.article USING btree (community_read_timestamp DESC);
 
 
 --
@@ -9793,20 +9729,6 @@ CREATE INDEX article_comment_count_idx ON core.article USING btree (comment_coun
 --
 
 CREATE INDEX article_hot_score_idx ON core.article USING btree (hot_score DESC);
-
-
---
--- Name: article_read_count_idx; Type: INDEX; Schema: core; Owner: -
---
-
-CREATE INDEX article_read_count_idx ON core.article USING btree (read_count DESC);
-
-
---
--- Name: article_silent_post_count_idx; Type: INDEX; Schema: core; Owner: -
---
-
-CREATE INDEX article_silent_post_count_idx ON core.article USING btree (silent_post_count);
 
 
 --

@@ -2359,7 +2359,8 @@ CREATE TABLE core.author (
     url text,
     twitter_handle text,
     twitter_handle_assignment core.twitter_handle_assignment DEFAULT 'none'::core.twitter_handle_assignment NOT NULL,
-    slug text NOT NULL
+    slug text NOT NULL,
+    email_address text
 );
 
 

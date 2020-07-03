@@ -2822,6 +2822,25 @@ $$;
 
 
 --
+-- Name: generate_random_string(integer); Type: FUNCTION; Schema: core; Owner: -
+--
+
+CREATE FUNCTION core.generate_random_string(length integer) RETURNS text
+    LANGUAGE sql
+    AS $$
+    SELECT array_to_string(
+        ARRAY(
+            SELECT
+                chr((65 + round(random() * 25))::int)
+            FROM
+                generate_series(1, generate_random_string.length)
+        ),
+        ''
+    );
+$$;
+
+
+--
 -- Name: time_zone; Type: TABLE; Schema: core; Owner: -
 --
 
@@ -7069,6 +7088,7 @@ CREATE TABLE core.user_account (
     post_alert_count integer DEFAULT 0 NOT NULL,
     follower_alert_count integer DEFAULT 0 NOT NULL,
     has_linked_twitter_account boolean DEFAULT false NOT NULL,
+    date_deleted timestamp without time zone,
     CONSTRAINT user_account_email_valid CHECK (((email)::text ~~ '%@%'::text)),
     CONSTRAINT user_account_name_valid CHECK (((name)::text ~ similar_escape('[A-Za-z0-9\-_]+'::text, NULL::text)))
 );
@@ -7108,6 +7128,73 @@ CREATE FUNCTION user_account_api.create_user_account(name text, email text, pass
 	    (SELECT id FROM new_user)
 	)
     SELECT * FROM new_user;
+$$;
+
+
+--
+-- Name: delete_user_account(text); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.delete_user_account(email_address text) RETURNS void
+    LANGUAGE plpgsql
+    AS $$
+<<locals>>
+DECLARE
+    user_account_id CONSTANT bigint := (
+        SELECT
+            user_account.id
+        FROM
+            core.user_account
+        WHERE
+            user_account.email = delete_user_account.email_address
+    );
+BEGIN
+    IF locals.user_account_id IS NULL THEN
+        RAISE EXCEPTION 'User account not found';
+    END IF;
+    UPDATE
+        core.user_account
+    SET
+        name = core.generate_random_string(30),
+        email = core.generate_random_string(30) || '@' || core.generate_random_string(30),
+        password_hash = E'\\xE40C3AA8085BEAF7E88F0131DEF4E800E0654FCED9ABA5A26B40CD30859229D2',
+        password_salt = E'\\x00000000000000000000000000000000',
+        date_deleted = core.utc_now()
+    WHERE
+        user_account.id = locals.user_account_id;
+    UPDATE
+        core.comment
+    SET
+        date_deleted = core.utc_now()
+    WHERE
+        comment.user_account_id = locals.user_account_id;
+    UPDATE
+        core.notification_preference
+    SET
+        company_update_via_email = FALSE,
+        aotd_via_email = FALSE,
+        aotd_via_extension = FALSE,
+        aotd_via_push = FALSE,
+        aotd_digest_via_email = 'never',
+        reply_via_email = FALSE,
+        reply_via_extension = FALSE,
+        reply_via_push = FALSE,
+        reply_digest_via_email = 'never',
+        loopback_via_email = FALSE,
+        loopback_via_extension = FALSE,
+        loopback_via_push = FALSE,
+        loopback_digest_via_email = 'never',
+        post_via_email = FALSE,
+        post_via_extension = FALSE,
+        post_via_push = FALSE,
+        post_digest_via_email = 'never',
+        follower_via_email = FALSE,
+        follower_via_extension = FALSE,
+        follower_via_push = FALSE,
+        follower_digest_via_email = 'never'
+    WHERE
+        notification_preference.user_account_id = locals.user_account_id;
+END;
 $$;
 
 

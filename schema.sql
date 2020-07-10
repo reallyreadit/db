@@ -1687,17 +1687,20 @@ CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC articl
 		article.comment_count::bigint,
 		article.read_count::bigint,
 		user_article.date_created,
-		coalesce(
-		   article_api.get_percent_complete(
-		      user_article.readable_word_count,
-		      user_article.words_read
-		   ),
-		   0
-		) AS percent_complete,
-		coalesce(
-		   user_article.date_completed IS NOT NULL,
-		   FALSE
-		) AS is_read,
+	    CASE WHEN article_authors.user_is_author
+	        THEN 100
+	        ELSE coalesce(
+               article_api.get_percent_complete(
+                  user_article.readable_word_count,
+                  user_article.words_read
+               ),
+               0
+            )
+		END AS percent_complete,
+	    CASE WHEN article_authors.user_is_author
+	        THEN TRUE
+	        ELSE user_article.date_completed IS NOT NULL
+	    END AS is_read,
 		star.date_starred,
 		article.average_rating_score,
 		user_article_rating.score,
@@ -1708,33 +1711,43 @@ CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC articl
 	    article.flair,
 	    article.aotd_contender_rank
 	FROM
-		article
-		JOIN article_api.article_pages ON (
+		core.article
+		JOIN article_api.article_pages ON
 			article_pages.article_id = article.id AND
-			article_pages.article_id = ANY (article_ids)
-		)
-		JOIN source ON source.id = article.source_id
-		LEFT JOIN article_api.article_authors ON (
-			article_authors.article_id = article.id AND
-			article_authors.article_id = ANY (article_ids)
-		)
-		LEFT JOIN article_api.article_tags ON (
+			article_pages.article_id = ANY (get_articles.article_ids)
+		JOIN source ON
+		    source.id = article.source_id
+		LEFT JOIN (
+		    SELECT
+		        article_author.article_id,
+		        array_agg(author.name) AS names,
+		        count(author_user_account_assignment.id) > 0 AS user_is_author
+		    FROM
+		        core.article_author
+		        JOIN core.author ON
+		            author.id = article_author.author_id
+		        LEFT JOIN author_user_account_assignment ON
+		            author_user_account_assignment.author_id = author.id AND
+		            author_user_account_assignment.user_account_id = get_articles.user_account_id
+		    WHERE
+		        article_author.article_id = ANY (get_articles.article_ids)
+		    GROUP BY
+		        article_author.article_id
+        ) AS article_authors ON
+			article_authors.article_id = article.id
+		LEFT JOIN article_api.article_tags ON
 			article_tags.article_id = article.id AND
-			article_tags.article_id = ANY (article_ids)
-		)
-		LEFT JOIN user_article ON (
+			article_tags.article_id = ANY (get_articles.article_ids)
+		LEFT JOIN core.user_article ON
 			user_article.user_account_id = get_articles.user_account_id AND
 			user_article.article_id = article.id
-		)
-		LEFT JOIN star ON (
+		LEFT JOIN core.star ON
 			star.user_account_id = get_articles.user_account_id AND
 			star.article_id = article.id
-		)
-		LEFT JOIN article_api.user_article_rating ON (
+		LEFT JOIN article_api.user_article_rating ON
 			user_article_rating.user_account_id = get_articles.user_account_id AND
 			user_article_rating.article_id = article.id AND
-			user_article_rating.article_id = ANY (article_ids)
-		)
+			user_article_rating.article_id = ANY (get_articles.article_ids)
 		LEFT JOIN (
 			SELECT
 				post.article_id,
@@ -1746,12 +1759,12 @@ CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC articl
 		        post.user_account_id = get_articles.user_account_id
 			GROUP BY
 				post.article_id
-		) AS posts
-			ON posts.article_id = article.id
-		LEFT JOIN core.user_account AS first_poster
-			ON first_poster.id = article.first_poster_id
+		) AS posts ON
+		    posts.article_id = article.id
+		LEFT JOIN core.user_account AS first_poster ON
+		    first_poster.id = article.first_poster_id
 	ORDER BY
-	    array_position(article_ids, article.id)
+	    array_position(get_articles.article_ids, article.id)
 $$;
 
 
@@ -7623,28 +7636,6 @@ $$;
 
 
 --
--- Name: article_author; Type: TABLE; Schema: core; Owner: -
---
-
-CREATE TABLE core.article_author (
-    article_id bigint NOT NULL,
-    author_id bigint NOT NULL
-);
-
-
---
--- Name: article_authors; Type: VIEW; Schema: article_api; Owner: -
---
-
-CREATE VIEW article_api.article_authors AS
- SELECT array_agg(author.name) AS names,
-    article_author.article_id
-   FROM (core.author
-     JOIN core.article_author ON ((article_author.author_id = author.id)))
-  GROUP BY article_author.article_id;
-
-
---
 -- Name: article_pages; Type: VIEW; Schema: article_api; Owner: -
 --
 
@@ -7751,6 +7742,16 @@ CREATE VIEW community_reads.community_read AS
     article.community_read_timestamp
    FROM core.article
   WHERE (article.community_read_timestamp IS NOT NULL);
+
+
+--
+-- Name: article_author; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.article_author (
+    article_id bigint NOT NULL,
+    author_id bigint NOT NULL
+);
 
 
 --
@@ -7898,6 +7899,37 @@ CREATE SEQUENCE core.author_id_seq
 --
 
 ALTER SEQUENCE core.author_id_seq OWNED BY core.author.id;
+
+
+--
+-- Name: author_user_account_assignment; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.author_user_account_assignment (
+    id bigint NOT NULL,
+    author_id bigint NOT NULL,
+    user_account_id bigint NOT NULL,
+    date_assigned timestamp without time zone NOT NULL
+);
+
+
+--
+-- Name: author_user_account_assignment_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.author_user_account_assignment_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: author_user_account_assignment_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.author_user_account_assignment_id_seq OWNED BY core.author_user_account_assignment.id;
 
 
 --
@@ -9025,6 +9057,13 @@ ALTER TABLE ONLY core.author ALTER COLUMN id SET DEFAULT nextval('core.author_id
 
 
 --
+-- Name: author_user_account_assignment id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.author_user_account_assignment ALTER COLUMN id SET DEFAULT nextval('core.author_user_account_assignment_id_seq'::regclass);
+
+
+--
 -- Name: captcha_response id; Type: DEFAULT; Schema: core; Owner: -
 --
 
@@ -9423,6 +9462,30 @@ ALTER TABLE ONLY core.author
 
 
 --
+-- Name: author_user_account_assignment author_user_account_assignment_author_id_key; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.author_user_account_assignment
+    ADD CONSTRAINT author_user_account_assignment_author_id_key UNIQUE (author_id);
+
+
+--
+-- Name: author_user_account_assignment author_user_account_assignment_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.author_user_account_assignment
+    ADD CONSTRAINT author_user_account_assignment_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: author_user_account_assignment author_user_account_assignment_user_account_id_key; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.author_user_account_assignment
+    ADD CONSTRAINT author_user_account_assignment_user_account_id_key UNIQUE (user_account_id);
+
+
+--
 -- Name: captcha_response captcha_response_pkey; Type: CONSTRAINT; Schema: core; Owner: -
 --
 
@@ -9780,6 +9843,14 @@ ALTER TABLE ONLY core.user_article_progress
 
 ALTER TABLE ONLY core.user_article_progress
     ADD CONSTRAINT user_article_progress_user_account_id_article_id_period_key UNIQUE (user_account_id, article_id, period);
+
+
+--
+-- Name: user_article user_article_unique_article_id_user_account_id; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.user_article
+    ADD CONSTRAINT user_article_unique_article_id_user_account_id UNIQUE (article_id, user_account_id);
 
 
 --
@@ -10143,6 +10214,22 @@ ALTER TABLE ONLY core.auth_service_refresh_token
 
 ALTER TABLE ONLY core.auth_service_user
     ADD CONSTRAINT auth_service_user_identity_id_fkey FOREIGN KEY (identity_id) REFERENCES core.auth_service_identity(id);
+
+
+--
+-- Name: author_user_account_assignment author_user_account_assignment_author_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.author_user_account_assignment
+    ADD CONSTRAINT author_user_account_assignment_author_id_fkey FOREIGN KEY (author_id) REFERENCES core.author(id);
+
+
+--
+-- Name: author_user_account_assignment author_user_account_assignment_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.author_user_account_assignment
+    ADD CONSTRAINT author_user_account_assignment_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
 
 
 --

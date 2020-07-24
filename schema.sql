@@ -1547,9 +1547,14 @@ $$;
 --
 
 CREATE FUNCTION article_api.find_page(url text) RETURNS SETOF core.page
-    LANGUAGE sql
+    LANGUAGE sql STABLE
     AS $$
-	SELECT * FROM page WHERE url = find_page.url;
+	SELECT
+        page.*
+    FROM
+        core.page
+    WHERE
+        page.url LIKE ('%' || trim(LEADING 'https' FROM find_page.url))
 $$;
 
 

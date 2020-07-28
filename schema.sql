@@ -190,6 +190,16 @@ CREATE TYPE article_api.author_metadata AS (
 
 
 --
+-- Name: tag_metadata; Type: TYPE; Schema: article_api; Owner: -
+--
+
+CREATE TYPE article_api.tag_metadata AS (
+	name text,
+	slug text
+);
+
+
+--
 -- Name: auth_service_association_method; Type: TYPE; Schema: core; Owner: -
 --
 
@@ -1322,10 +1332,10 @@ $$;
 
 
 --
--- Name: create_article(text, text, bigint, timestamp without time zone, timestamp without time zone, text, text, article_api.author_metadata[], text[]); Type: FUNCTION; Schema: article_api; Owner: -
+-- Name: create_article(text, text, bigint, timestamp without time zone, timestamp without time zone, text, text, article_api.author_metadata[], article_api.tag_metadata[]); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
-CREATE FUNCTION article_api.create_article(title text, slug text, source_id bigint, date_published timestamp without time zone, date_modified timestamp without time zone, section text, description text, authors article_api.author_metadata[], tags text[]) RETURNS bigint
+CREATE FUNCTION article_api.create_article(title text, slug text, source_id bigint, date_published timestamp without time zone, date_modified timestamp without time zone, section text, description text, authors article_api.author_metadata[], tags article_api.tag_metadata[]) RETURNS bigint
     LANGUAGE plpgsql
     AS $$
 <<locals>>
@@ -1333,7 +1343,7 @@ DECLARE
 	article_id bigint;
     current_author article_api.author_metadata;
 	current_author_id bigint;
-	current_tag text;
+	current_tag article_api.tag_metadata;
 	current_tag_id bigint;
 BEGIN
 	INSERT INTO
@@ -1404,14 +1414,17 @@ BEGIN
 		FROM
 		    core.tag
 		WHERE
-		    tag.name = locals.current_tag;
+		    tag.slug = locals.current_tag.slug
+		FOR UPDATE;
 		IF locals.current_tag_id IS NULL THEN
 			INSERT INTO
 			    core.tag (
-			        name
+			        name,
+			        slug
 			    )
 			VALUES (
-			    locals.current_tag
+			    locals.current_tag.name,
+			    locals.current_tag.slug
 			)
 			RETURNING
 			    id
@@ -1911,6 +1924,72 @@ $$;
 
 
 --
+-- Name: merge_tags(text, text[]); Type: FUNCTION; Schema: article_api; Owner: -
+--
+
+CREATE FUNCTION article_api.merge_tags(target_slug text, VARIADIC source_slugs text[]) RETURNS bigint[]
+    LANGUAGE plpgsql
+    AS $$
+<<locals>>
+DECLARE
+    tagged_article_ids bigint[];
+BEGIN
+    -- delete all source and target article_tags in order to prevent duplicates
+    WITH deleted_article_tag AS (
+        DELETE FROM
+            core.article_tag
+        USING
+            (
+                SELECT
+                    tag.id
+                FROM
+                    core.tag
+                WHERE
+                    tag.slug = ANY (merge_tags.source_slugs) OR
+                    tag.slug = merge_tags.target_slug
+            ) AS merge_tag
+        WHERE
+            article_tag.tag_id = merge_tag.id
+        RETURNING
+            article_tag.article_id
+    )
+    SELECT
+        array_agg(DISTINCT deleted_article_tag.article_id)
+    FROM
+        deleted_article_tag
+    INTO
+        locals.tagged_article_ids;
+    -- insert article_tags for target tag
+    INSERT INTO
+        core.article_tag (
+            article_id,
+            tag_id
+        )
+    SELECT
+        tagged_article.id,
+        (
+            SELECT
+                tag.id
+            FROM
+                core.tag
+            WHERE
+                tag.slug = merge_tags.target_slug
+        )
+    FROM
+        unnest(locals.tagged_article_ids) AS tagged_article (id);
+    -- delete source tags
+    DELETE FROM
+        core.tag
+    WHERE
+        tag.slug = ANY (merge_tags.source_slugs);
+    -- return articles
+    RETURN
+        locals.tagged_article_ids;
+END;
+$$;
+
+
+--
 -- Name: rating; Type: TABLE; Schema: core; Owner: -
 --
 
@@ -2340,7 +2419,8 @@ BEGIN
 			        ELSE
 			            article.community_read_timestamp
 			        END
-                )
+                ),
+			    latest_read_timestamp = locals.utc_now
 			WHERE
 			    article.id = locals.current_user_article.article_id;
 		END IF;
@@ -2717,6 +2797,70 @@ $$;
 
 
 --
+-- Name: get_search_options(); Type: FUNCTION; Schema: community_reads; Owner: -
+--
+
+CREATE FUNCTION community_reads.get_search_options() RETURNS TABLE(category text, name text, slug text, score bigint)
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT
+        'author',
+        top_author.name,
+        top_author.slug,
+        top_author.score
+    FROM
+        stats.get_top_author_leaderboard(
+            max_rank => 50,
+            since_date => core.utc_now() - '30 days'::interval
+        ) AS top_author
+    UNION ALL
+    (
+        SELECT
+            'tag',
+            tag.name,
+            tag.slug,
+            count(*)
+        FROM
+            core.tag
+            JOIN core.article_tag ON
+                article_tag.tag_id = tag.id
+            JOIN community_reads.community_read ON
+                community_read.id = article_tag.article_id
+            JOIN core.user_article ON
+                user_article.article_id = community_read.id AND
+                user_article.date_completed IS NOT NULL
+        GROUP BY
+            tag.id
+        ORDER BY
+            count(*) DESC
+        LIMIT
+            50
+    )
+    UNION ALL
+    (
+        SELECT
+            'source',
+            source.name,
+            source.slug,
+            count(*)
+        FROM
+            core.source
+            JOIN community_reads.community_read ON
+                community_read.source_id = source.id
+            JOIN core.user_article ON
+                user_article.article_id = community_read.id AND
+                user_article.date_completed IS NOT NULL
+        GROUP BY
+            source.id
+        ORDER BY
+            count(*) DESC
+        LIMIT
+            50
+    );
+$$;
+
+
+--
 -- Name: get_top(bigint, integer, integer, integer, integer); Type: FUNCTION; Schema: community_reads; Owner: -
 --
 
@@ -2753,6 +2897,88 @@ CREATE FUNCTION community_reads.get_top(user_account_id bigint, page_number inte
 			LIMIT page_size
 		)
 	) AS articles;
+$$;
+
+
+--
+-- Name: search_articles(bigint, integer, integer, text[], text[], text[], integer, integer); Type: FUNCTION; Schema: community_reads; Owner: -
+--
+
+CREATE FUNCTION community_reads.search_articles(user_account_id bigint, page_number integer, page_size integer, source_slugs text[], author_slugs text[], tag_slugs text[], min_length integer, max_length integer) RETURNS SETOF article_api.article_page_result
+    LANGUAGE sql STABLE
+    AS $$
+    WITH filtered_article AS (
+        SELECT DISTINCT ON (
+                community_read.id
+            )
+            community_read.id,
+            community_read.latest_read_timestamp,
+            community_read.latest_post_timestamp
+        FROM
+            community_reads.community_read
+            JOIN core.source ON
+                source.id = community_read.source_id
+            LEFT JOIN core.article_author ON
+                article_author.article_id = community_read.id
+            LEFT JOIN core.author ON
+                author.id = article_author.author_id
+            LEFT JOIN core.article_tag ON
+                article_tag.article_id = community_read.id
+            LEFT JOIN core.tag ON
+                tag.id = article_tag.tag_id
+        WHERE
+            CASE WHEN array_length(search_articles.source_slugs, 1) > 0
+                THEN
+                    source.slug = ANY (search_articles.source_slugs)
+                ELSE
+                    TRUE
+            END AND
+            CASE WHEN array_length(search_articles.author_slugs, 1) > 0
+                THEN
+                    author.slug = ANY (search_articles.author_slugs)
+                ELSE
+                    TRUE
+            END AND
+            CASE WHEN array_length(search_articles.tag_slugs, 1) > 0
+                THEN
+                    tag.slug = ANY (search_articles.tag_slugs)
+                ELSE
+                    TRUE
+            END AND
+			core.matches_article_length(
+				community_read.word_count,
+			    search_articles.min_length,
+			    search_articles.max_length
+			)
+        ORDER BY
+            community_read.id
+    )
+    SELECT
+    	articles.*,
+		(
+		    SELECT
+		        count(*)
+		    FROM
+		        filtered_article
+		)
+    FROM
+		article_api.get_articles(
+			search_articles.user_account_id,
+			VARIADIC ARRAY(
+				SELECT
+					filtered_article.id
+				FROM
+					filtered_article
+				ORDER BY
+					filtered_article.latest_post_timestamp DESC NULLS LAST,
+				    filtered_article.latest_read_timestamp DESC,
+				    filtered_article.id DESC
+				OFFSET
+					(search_articles.page_number - 1) * search_articles.page_size
+				LIMIT
+					search_articles.page_size
+			)
+		) AS articles;
 $$;
 
 
@@ -5096,6 +5322,15 @@ BEGIN
 	        ELSE
 	            article.community_read_timestamp
 	        END
+        ),
+	    latest_post_timestamp = (
+	        CASE WHEN
+				create_comment.parent_comment_id IS NULL
+			THEN
+				core.utc_now()
+			ELSE
+				article.latest_post_timestamp
+			END
         )
 	WHERE
 		article.id = create_comment.article_id;
@@ -5223,7 +5458,8 @@ BEGIN
             ELSE
                 article.community_read_timestamp
             END
-        )
+        ),
+        latest_post_timestamp = core.utc_now()
     WHERE
         article.id = create_silent_post.article_id;
     -- insert and return silent_post
@@ -5379,6 +5615,137 @@ CREATE FUNCTION social.get_following(following_id bigint) RETURNS SETOF core.fol
     	core.following
     WHERE
     	id = get_following.following_id;
+$$;
+
+
+--
+-- Name: get_notification_posts(bigint, integer, integer); Type: FUNCTION; Schema: social; Owner: -
+--
+
+CREATE FUNCTION social.get_notification_posts(user_id bigint, page_number integer, page_size integer) RETURNS SETOF social.article_post_page_result
+    LANGUAGE sql STABLE
+    AS $$
+	WITH notification_post AS (
+	    -- followee post
+	    SELECT
+	    	followee_post.article_id,
+	        followee_post.user_account_id,
+	        followee_post.date_created,
+	        followee_post.comment_id,
+	        followee_post.comment_text,
+	        followee_post.comment_addenda,
+	        followee_post.silent_post_id,
+	        followee_post.date_deleted
+	    FROM
+	    	social.post AS followee_post
+	    	JOIN social.active_following ON
+	    	    active_following.followee_user_account_id = followee_post.user_account_id AND
+	    	    active_following.follower_user_account_id = get_notification_posts.user_id AND
+	    	    followee_post.date_deleted IS NULL
+	    UNION ALL
+	    -- loopback comment
+	    SELECT
+	        loopback.article_id,
+	        loopback.user_account_id,
+	        loopback.date_created,
+	        loopback.id AS comment_id,
+	        loopback.text AS comment_text,
+	        loopback.addenda AS comment_addenda,
+	        NULL::bigint AS silent_post_id,
+	        loopback.date_deleted
+	    FROM
+	        social.comment AS loopback
+	        JOIN core.user_article AS completed_article ON
+	            completed_article.article_id = loopback.article_id AND
+	            completed_article.date_completed < loopback.date_created AND
+	            loopback.parent_comment_id IS NULL AND
+	            loopback.user_account_id != completed_article.user_account_id AND
+	            loopback.date_deleted IS NULL AND
+	            completed_article.user_account_id = get_notification_posts.user_id
+	        LEFT JOIN social.active_following ON
+	            active_following.followee_user_account_id = loopback.user_account_id AND
+	            active_following.follower_user_account_id = completed_article.user_account_id
+	    WHERE
+	        active_following.id IS NULL
+	),
+	paginated_post AS (
+	    SELECT
+	    	notification_post.*
+	    FROM
+	    	notification_post
+	    ORDER BY
+			notification_post.date_created DESC
+		OFFSET
+			(get_notification_posts.page_number - 1) * get_notification_posts.page_size
+		LIMIT
+			get_notification_posts.page_size
+	)
+    SELECT
+		article.*,
+		paginated_post.date_created,
+		user_account.name,
+		paginated_post.comment_id,
+		paginated_post.comment_text,
+        paginated_post.comment_addenda,
+        paginated_post.silent_post_id,
+        paginated_post.date_deleted,
+		(
+			alert.comment_id IS NOT NULL OR
+			alert.silent_post_id IS NOT NULL
+		) AS has_alert,
+		(
+		    SELECT
+		    	count(notification_post.*)
+		    FROM
+		        notification_post
+		) AS total_count
+	FROM
+		article_api.get_articles(
+			get_notification_posts.user_id,
+			VARIADIC ARRAY(
+				SELECT
+				    DISTINCT paginated_post.article_id
+				FROM
+				    paginated_post
+			)
+		) AS article
+		JOIN paginated_post ON
+		    paginated_post.article_id = article.id
+		JOIN user_account ON
+		    user_account.id = paginated_post.user_account_id
+		LEFT JOIN (
+		    SELECT
+				data.comment_id,
+		        data.silent_post_id
+		    FROM
+		    	notification_event AS event
+		    	JOIN notification_receipt AS receipt ON
+		    	    receipt.event_id = event.id AND
+		    	    event.type IN ('post', 'loopback') AND
+		    	    receipt.user_account_id = get_notification_posts.user_id AND
+                    receipt.date_alert_cleared IS NULL
+		    	JOIN notification_data AS data ON
+		    	    data.event_id = event.id AND
+		    	    (
+                        data.comment_id IN (
+                            SELECT
+                                paginated_post.comment_id
+                            FROM
+                                paginated_post
+                        ) OR
+                        data.silent_post_id IN (
+                            SELECT
+                                paginated_post.silent_post_id
+                            FROM
+                                paginated_post
+                        )
+                    )
+		) AS alert ON (
+		    alert.comment_id = paginated_post.comment_id OR
+		    alert.silent_post_id = paginated_post.silent_post_id
+		)
+    ORDER BY
+    	paginated_post.date_created DESC
 $$;
 
 
@@ -5725,6 +6092,97 @@ CREATE FUNCTION social.get_profile(viewer_user_id bigint, subject_user_name text
     	subject.id = user_account_api.get_user_account_id_by_name(get_profile.subject_user_name)
     GROUP BY
     	subject.id;
+$$;
+
+
+--
+-- Name: get_reply_posts(bigint, integer, integer); Type: FUNCTION; Schema: social; Owner: -
+--
+
+CREATE FUNCTION social.get_reply_posts(user_id bigint, page_number integer, page_size integer) RETURNS SETOF social.article_post_page_result
+    LANGUAGE sql STABLE
+    AS $$
+	WITH reply AS (
+	    SELECT
+	    	reply.id,
+	        reply.date_created,
+	        reply.text,
+	        reply.addenda,
+	        reply.article_id,
+	        reply.user_account_id,
+	        reply.date_deleted
+	    FROM
+	    	core.comment AS parent
+	    	JOIN social.comment AS reply ON
+	    	    reply.parent_comment_id = parent.id AND
+                parent.user_account_id = get_reply_posts.user_id AND
+                reply.user_account_id != get_reply_posts.user_id AND
+                reply.date_deleted IS NULL
+	),
+	paginated_reply AS (
+	    SELECT
+	    	reply.*
+	    FROM
+	    	reply
+	    ORDER BY
+			reply.date_created DESC
+		OFFSET
+			(get_reply_posts.page_number - 1) * get_reply_posts.page_size
+		LIMIT
+			get_reply_posts.page_size
+	)
+    SELECT
+		article.*,
+		paginated_reply.date_created,
+		user_account.name,
+		paginated_reply.id,
+		paginated_reply.text,
+        paginated_reply.addenda,
+        NULL::bigint,
+        paginated_reply.date_deleted,
+        alert.comment_id IS NOT NULL,
+		(
+		    SELECT
+		    	count(reply.*)
+		    FROM
+		        reply
+		) AS total_count
+	FROM
+		article_api.get_articles(
+			get_reply_posts.user_id,
+			VARIADIC ARRAY(
+				SELECT
+				    DISTINCT paginated_reply.article_id
+				FROM
+				    paginated_reply
+			)
+		) AS article
+		JOIN paginated_reply ON
+		    paginated_reply.article_id = article.id
+		JOIN user_account ON
+		    user_account.id = paginated_reply.user_account_id
+		LEFT JOIN (
+		    SELECT
+				data.comment_id
+		    FROM
+		    	notification_event AS event
+		    	JOIN notification_receipt AS receipt ON
+		    	    receipt.event_id = event.id AND
+		    	    event.type = 'reply' AND
+                    receipt.user_account_id = get_reply_posts.user_id AND
+                    receipt.date_alert_cleared IS NULL
+		    	JOIN notification_data AS data ON
+		    	    data.event_id = event.id AND
+		    	    data.comment_id IN (
+                        SELECT
+                            paginated_reply.id
+                        FROM
+                            paginated_reply
+                    )
+		) AS alert ON
+		    alert.comment_id = paginated_reply.id
+    ORDER BY
+    	paginated_reply.date_created DESC
 $$;
 
 
@@ -7670,7 +8128,8 @@ CREATE TABLE core.article_tag (
 
 CREATE TABLE core.tag (
     id bigint NOT NULL,
-    name text NOT NULL
+    name text NOT NULL,
+    slug text NOT NULL
 );
 
 
@@ -7725,7 +8184,9 @@ CREATE TABLE core.article (
     first_poster_id bigint,
     flair core.article_flair,
     aotd_contender_rank integer DEFAULT 0 NOT NULL,
-    community_read_timestamp timestamp without time zone
+    community_read_timestamp timestamp without time zone,
+    latest_read_timestamp timestamp without time zone,
+    latest_post_timestamp timestamp without time zone
 );
 
 
@@ -7744,7 +8205,9 @@ CREATE VIEW community_reads.community_read AS
     article.average_rating_score,
     article.date_published,
     article.source_id,
-    article.community_read_timestamp
+    article.community_read_timestamp,
+    article.latest_read_timestamp,
+    article.latest_post_timestamp
    FROM core.article
   WHERE (article.community_read_timestamp IS NOT NULL);
 
@@ -9787,19 +10250,19 @@ ALTER TABLE ONLY core.star
 
 
 --
--- Name: tag tag_name_key; Type: CONSTRAINT; Schema: core; Owner: -
---
-
-ALTER TABLE ONLY core.tag
-    ADD CONSTRAINT tag_name_key UNIQUE (name);
-
-
---
 -- Name: tag tag_pkey; Type: CONSTRAINT; Schema: core; Owner: -
 --
 
 ALTER TABLE ONLY core.tag
     ADD CONSTRAINT tag_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: tag tag_slug_key; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.tag
+    ADD CONSTRAINT tag_slug_key UNIQUE (slug);
 
 
 --
@@ -9893,6 +10356,13 @@ CREATE INDEX article_community_read_timestamp_idx ON core.article USING btree (c
 --
 
 CREATE INDEX article_hot_score_idx ON core.article USING btree (hot_score DESC);
+
+
+--
+-- Name: article_tag_tag_id_idx; Type: INDEX; Schema: core; Owner: -
+--
+
+CREATE INDEX article_tag_tag_id_idx ON core.article_tag USING btree (tag_id);
 
 
 --

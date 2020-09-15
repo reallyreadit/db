@@ -244,6 +244,16 @@ CREATE TYPE core.challenge_response_action AS ENUM (
 
 
 --
+-- Name: display_theme; Type: TYPE; Schema: core; Owner: -
+--
+
+CREATE TYPE core.display_theme AS ENUM (
+    'light',
+    'dark'
+);
+
+
+--
 -- Name: notification_action; Type: TYPE; Schema: core; Owner: -
 --
 
@@ -7571,39 +7581,65 @@ CREATE TABLE core.user_account (
 
 
 --
--- Name: create_user_account(text, text, bytea, bytea, bigint, text); Type: FUNCTION; Schema: user_account_api; Owner: -
+-- Name: create_user_account(text, text, bytea, bytea, bigint, text, text); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
-CREATE FUNCTION user_account_api.create_user_account(name text, email text, password_hash bytea, password_salt bytea, time_zone_id bigint, analytics text) RETURNS SETOF core.user_account
-    LANGUAGE sql
+CREATE FUNCTION user_account_api.create_user_account(name text, email text, password_hash bytea, password_salt bytea, time_zone_id bigint, theme text, analytics text) RETURNS SETOF core.user_account
+    LANGUAGE plpgsql
     AS $$
-    WITH new_user AS (
-		INSERT INTO
-			core.user_account (
-				name,
-				email,
-				password_hash,
-				password_salt,
-				time_zone_id,
-				creation_analytics
-			)
-		VALUES
-			(
-				trim(create_user_account.name),
-				trim(create_user_account.email),
-				create_user_account.password_hash,
-				create_user_account.password_salt,
-				create_user_account.time_zone_id,
-				create_user_account.analytics::json
-			)
-		RETURNING *
-    ),
-	initial_preference AS (
-		INSERT INTO
-	    	core.notification_preference (user_account_id)
-	    (SELECT id FROM new_user)
-	)
-    SELECT * FROM new_user;
+<<locals>>
+DECLARE
+    new_user core.user_account;
+BEGIN
+    -- create new user
+    INSERT INTO
+        core.user_account (
+            name,
+            email,
+            password_hash,
+            password_salt,
+            time_zone_id,
+            creation_analytics
+        )
+    VALUES
+        (
+            trim(
+                create_user_account.name
+            ),
+            trim(
+                create_user_account.email
+            ),
+            create_user_account.password_hash,
+            create_user_account.password_salt,
+            create_user_account.time_zone_id,
+            create_user_account.analytics::json
+        )
+    RETURNING
+        *
+    INTO
+        locals.new_user;
+    -- set initial notification preference
+    INSERT INTO
+        core.notification_preference (
+            user_account_id
+        )
+	VALUES (
+	    locals.new_user.id
+    );
+    -- set initial display preference if a theme is provided
+     IF create_user_account.theme IS NOT NULL THEN
+        PERFORM
+            user_account_api.set_display_preference(
+                user_account_id => locals.new_user.id,
+                theme => create_user_account.theme,
+                text_size => 1,
+                hide_links => TRUE
+            );
+    END IF;
+    -- return user
+    RETURN NEXT
+        locals.new_user;
+END;
 $$;
 
 
@@ -7821,6 +7857,36 @@ $$;
 
 
 --
+-- Name: display_preference; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.display_preference (
+    id bigint NOT NULL,
+    user_account_id bigint NOT NULL,
+    last_modified timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    theme core.display_theme NOT NULL,
+    text_size integer NOT NULL,
+    hide_links boolean NOT NULL
+);
+
+
+--
+-- Name: get_display_preference(bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.get_display_preference(user_account_id bigint) RETURNS SETOF core.display_preference
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT
+        *
+    FROM
+        user_account_api.current_display_preference
+    WHERE
+        current_display_preference.user_account_id = get_display_preference.user_account_id;
+$$;
+
+
+--
 -- Name: get_email_confirmation(bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
@@ -7984,6 +8050,68 @@ CREATE FUNCTION user_account_api.list_email_confirmations(user_account_id bigint
 	WHERE
 		user_account_id = list_email_confirmations.user_account_id
 	ORDER BY date_created DESC;
+$$;
+
+
+--
+-- Name: set_display_preference(bigint, text, integer, boolean); Type: FUNCTION; Schema: user_account_api; Owner: -
+--
+
+CREATE FUNCTION user_account_api.set_display_preference(user_account_id bigint, theme text, text_size integer, hide_links boolean) RETURNS SETOF core.display_preference
+    LANGUAGE plpgsql
+    AS $$
+<<locals>>
+DECLARE
+    existing_preference_id bigint;
+BEGIN
+    -- check for an existing record
+	SELECT
+		preference.id
+    INTO
+    	locals.existing_preference_id
+    FROM
+    	core.display_preference AS preference
+    WHERE
+    	preference.user_account_id = set_display_preference.user_account_id AND
+    	preference.last_modified >= core.utc_now() - '1 hour'::interval
+    ORDER BY
+    	preference.last_modified DESC
+    LIMIT
+        1
+    FOR UPDATE;
+    -- update the existing record or create a new one
+    IF locals.existing_preference_id IS NOT NULL THEN
+        RETURN QUERY
+		UPDATE
+		    core.display_preference
+        SET
+            last_modified = core.utc_now(),
+            theme = set_display_preference.theme::core.display_theme,
+            text_size = set_display_preference.text_size,
+            hide_links = set_display_preference.hide_links
+        WHERE
+        	display_preference.id = locals.existing_preference_id
+        RETURNING
+            *;
+	ELSE
+	    RETURN QUERY
+    	INSERT INTO
+    	    core.display_preference (
+    	        user_account_id,
+    	        theme,
+    	        text_size,
+    	        hide_links
+			)
+		VALUES (
+		    set_display_preference.user_account_id,
+		    set_display_preference.theme::core.display_theme,
+		    set_display_preference.text_size,
+		    set_display_preference.hide_links
+		)
+		RETURNING
+		    *;
+    END IF;
+END;
 $$;
 
 
@@ -8660,6 +8788,25 @@ CREATE SEQUENCE core.comment_revision_id_seq
 --
 
 ALTER SEQUENCE core.comment_revision_id_seq OWNED BY core.comment_revision.id;
+
+
+--
+-- Name: display_preference_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.display_preference_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: display_preference_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.display_preference_id_seq OWNED BY core.display_preference.id;
 
 
 --
@@ -9476,6 +9623,22 @@ CREATE VIEW stats.scribe_comment AS
 
 
 --
+-- Name: current_display_preference; Type: VIEW; Schema: user_account_api; Owner: -
+--
+
+CREATE VIEW user_account_api.current_display_preference AS
+ SELECT current_preference.id,
+    current_preference.user_account_id,
+    current_preference.last_modified,
+    current_preference.theme,
+    current_preference.text_size,
+    current_preference.hide_links
+   FROM (core.display_preference current_preference
+     LEFT JOIN core.display_preference later_preference ON (((later_preference.user_account_id = current_preference.user_account_id) AND (later_preference.last_modified > current_preference.last_modified))))
+  WHERE (later_preference.id IS NULL);
+
+
+--
 -- Name: article id; Type: DEFAULT; Schema: core; Owner: -
 --
 
@@ -9585,6 +9748,13 @@ ALTER TABLE ONLY core.comment_addendum ALTER COLUMN id SET DEFAULT nextval('core
 --
 
 ALTER TABLE ONLY core.comment_revision ALTER COLUMN id SET DEFAULT nextval('core.comment_revision_id_seq'::regclass);
+
+
+--
+-- Name: display_preference id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.display_preference ALTER COLUMN id SET DEFAULT nextval('core.display_preference_id_seq'::regclass);
 
 
 --
@@ -10785,6 +10955,14 @@ ALTER TABLE ONLY core.comment_revision
 
 ALTER TABLE ONLY core.comment
     ADD CONSTRAINT comment_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
+
+
+--
+-- Name: display_preference display_preference_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.display_preference
+    ADD CONSTRAINT display_preference_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
 
 
 --

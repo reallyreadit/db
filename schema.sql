@@ -5308,7 +5308,7 @@ CREATE FUNCTION notifications.register_push_device(user_account_id bigint, insta
     AS $$
 <<locals>>
 DECLARE
-	existing_device core.notification_push_device;
+	existing_device notifications.registered_push_device;
 BEGIN
 	-- check for existing registered device with matching installation_id
 	SELECT
@@ -5328,33 +5328,28 @@ BEGIN
 	THEN
 		-- unregister the existing device if the user or token has changed
 		IF
-		   locals.existing_device IS NOT NULL
+		   locals.existing_device.id IS NOT NULL
 		THEN
-			UPDATE
-				core.notification_push_device
-			SET
-				date_unregistered = core.utc_now(),
-				unregistration_reason = (
-					CASE WHEN
-					   locals.existing_device.user_account_id != register_push_device.user_account_id
-					THEN
-					   'user_change'
-					ELSE
-					   'token_change'
-					END
-				)
-			WHERE
-				notification_push_device.id = locals.existing_device.id;
+		   PERFORM
+		   	notifications.unregister_push_device_by_installation_id(
+		   	   installation_id => locals.existing_device.installation_id,
+		   	   reason => (
+		   	      CASE WHEN
+							locals.existing_device.user_account_id != register_push_device.user_account_id
+						THEN
+							'user_change'
+						ELSE
+							'token_change'
+						END
+					)
+		   	);
 		END IF;
 		-- unregister any other currently registered devices using the same token
-		UPDATE
-			core.notification_push_device
-		SET
-			date_unregistered = core.utc_now(),
-			unregistration_reason = 'reinstall'
-		WHERE
-			notification_push_device.token = register_push_device.token AND
-			notification_push_device.date_unregistered IS NULL;
+		PERFORM
+			notifications.unregister_push_device_by_token(
+				token => register_push_device.token,
+			   reason => 'reinstall'
+			);
 		-- create the registration and return the result
 		RETURN QUERY
 		INSERT INTO

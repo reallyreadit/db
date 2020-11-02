@@ -2258,8 +2258,10 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
                 ) /
 			    (
                     CASE
-                        -- divide articles by Bill Loundy (id # 49) by 10
-                        WHEN 49 = ANY(article_authors.author_ids)
+                        -- divide articles by Bill Loundy (id # 49) and Jeff Camera (id # 216185) by 10
+                        WHEN
+                           49 = ANY(article_authors.author_ids) OR
+                           216185 = ANY(article_authors.author_ids)
                         THEN 10
                         ELSE 1
                     END

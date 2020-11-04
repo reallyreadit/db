@@ -6580,7 +6580,7 @@ $$;
 CREATE FUNCTION stats.get_current_streak(user_account_id bigint) RETURNS stats.streak
     LANGUAGE sql STABLE
     AS $$
-    -- get the name of the user's time zone
+   -- get the name of the user's time zone
 	WITH RECURSIVE user_time_zone AS (
 		SELECT
 			name
@@ -6665,8 +6665,8 @@ CREATE FUNCTION stats.get_current_streak(user_account_id bigint) RETURNS stats.s
 					SELECT
 						(local_timestamp - '1 day'::interval)::date AS local_timestamp,
 						tsrange(
-							lower(utc_range) - '1 day'::interval,
-							upper(utc_range) - '1 day'::interval
+							local_to_utc_timestamp(local_timestamp - '1 day'::interval, (SELECT name FROM user_time_zone)),
+							local_to_utc_timestamp(local_timestamp, (SELECT name FROM user_time_zone))
 						) AS utc_range
 					FROM
 						streak_day

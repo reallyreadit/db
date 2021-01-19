@@ -1,14 +1,32 @@
 SELECT
-	id, top_score, read_count, comment_count, average_rating_score, estimate_article_length(word_count), aotd_timestamp, title
+	article.id,
+   article.top_score,
+   article.read_count,
+   article.comment_count,
+   article.average_rating_score,
+   estimate_article_length(article.word_count) AS length,
+   article.aotd_timestamp,
+   article.title,
+   'https://readup.com/comments/' || replace(article.slug, '_', '/') AS url
 FROM
 	core.article
 WHERE
-	aotd_timestamp > '2019-01-01' AND
-    source_id NOT IN (SELECT id FROM source WHERE hostname IN ('blog.readup.com', 'billloundy.com')) AND
-    --word_count < (184 * 15)
-	--word_count >= (184 * 15) AND word_count < (184 * 30)
-	word_count >= (184 * 30)
+	article.aotd_timestamp > '2020-01-01' AND
+	article.source_id NOT IN (
+	   SELECT
+	      source.id
+	   FROM
+			core.source
+	   WHERE
+	      source.hostname IN (
+	         'blog.readup.com',
+	      	'billloundy.com'
+	      )
+	) AND
+	--article.word_count < (184 * 15)
+	--article.word_count >= (184 * 15) AND article.word_count < (184 * 30)
+	article.word_count >= (184 * 30)
 ORDER BY
-	top_score DESC NULLS LAST
+	article.top_score DESC NULLS LAST
 LIMIT
 	5;

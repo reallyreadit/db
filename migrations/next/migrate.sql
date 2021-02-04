@@ -76,6 +76,12 @@ CHECK (
 	VALUE <@ int4range(1000, 9999, '[]')
 );
 
+CREATE DOMAIN
+	core.iso_alpha_2_country_code AS char (2)
+CHECK (
+	VALUE SIMILAR TO '[A-Z]{2}'
+);
+
 CREATE TABLE
    core.subscription_payment_method (
 		provider core.subscription_provider,
@@ -101,6 +107,7 @@ CREATE TABLE
 			CHECK (
 				last_four_digits SIMILAR TO '[0-9]{4}'
 			),
+		country core.iso_alpha_2_country_code NOT NULL,
    	current_version_date timestamp NOT NULL
 	);
 
@@ -365,6 +372,7 @@ SELECT
 	method.wallet,
 	method.brand,
 	method.last_four_digits,
+	method.country,
 	current_version.expiration_month,
 	current_version.expiration_year
 FROM
@@ -385,6 +393,7 @@ SELECT
 	current_method.wallet,
 	current_method.brand,
 	current_method.last_four_digits,
+	current_method.country,
 	current_method.expiration_month,
 	current_method.expiration_year
 FROM
@@ -583,6 +592,7 @@ CREATE FUNCTION
 		wallet text,
 		brand text,
 		last_four_digits text,
+		country text,
 		expiration_month int,
 		expiration_year int
 	)
@@ -607,6 +617,7 @@ BEGIN
    		wallet,
    		brand,
    		last_four_digits,
+   		country,
    		current_version_date
    	)
    	VALUES (
@@ -617,6 +628,7 @@ BEGIN
 			create_payment_method.wallet::core.subscription_payment_method_wallet,
 			create_payment_method.brand::core.subscription_payment_method_brand,
 			create_payment_method.last_four_digits::char (4),
+			create_payment_method.country::core.iso_alpha_2_country_code,
 			locals.version_timestamp
 		);
 	INSERT INTO

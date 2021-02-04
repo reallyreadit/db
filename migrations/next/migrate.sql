@@ -456,22 +456,20 @@ SELECT
 	subscription.provider_subscription_id,
 	subscription.date_created,
 	subscription.date_terminated,
-	cast(
-		(
-			latest_period.provider_period_id,
-			latest_period.provider_price_id,
-			level.name,
-			coalesce(level.amount, price.custom_amount),
-			latest_period.provider_payment_method_id,
-			latest_period.begin_date,
-			latest_period.end_date,
-			latest_period.date_created,
-			latest_period.payment_status,
-			latest_period.date_paid,
-			latest_period.date_refunded,
-			latest_period.refund_reason
-		) AS subscriptions.subscription_status_latest_period
-	) AS latest_period
+	(
+		latest_period.provider_period_id,
+		latest_period.provider_price_id,
+		level.name,
+		coalesce(level.amount, price.custom_amount),
+		latest_period.provider_payment_method_id,
+		latest_period.begin_date,
+		latest_period.end_date,
+		latest_period.date_created,
+		latest_period.payment_status,
+		latest_period.date_paid,
+		latest_period.date_refunded,
+		latest_period.refund_reason
+	)::subscriptions.subscription_status_latest_period AS latest_period
 FROM
 	core.subscription
 	JOIN

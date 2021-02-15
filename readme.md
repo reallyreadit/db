@@ -20,6 +20,14 @@
     ```
     export PATH=$PATH:/Library/PostgreSQL/9.6/bin
     ```
-5. Restore a database dump, supplying the desired name of the database. If there is an existing database with the same name it will be dropped before a new one is created.
+## Usage Guide
+After you complete the Setup Guide your local PostgreSQL server will be up and running and will start automatically with your system. Next up you'll want to restore a database dump file which will create the Readup database and populate it with data.
+### Restoring Database Dumps
+Restore a database dump any time you need to upgrade to a newer version of the Readup database or simply want to revert the Readup database to a clean slate. Any changes that have been made to the database since the last restore will be lost.
 
-        pwsh dev-scripts/restore.ps1 -DbName rrit -DumpFile /Users/jeff/Downloads/2020-01-23-dev.tar
+Run the following PowerShell script to restore a database dump, supplying the desired name of the database. Note the following:
+- If there is an existing database with the same name it will be dropped before a new one is created.
+- The script cannot proceed if there are active connections to an existing database. If you receive the active connections notice then you may need to stop the `api` server or close any active connections from any other SQL clients you may have running.
+- It is normal to receive a warning about a failure to refresh the materialized views. This is an issue with `pg_restore` and the materialized views will be refreshed manually before the script finishes.
+<!--end list-->
+    pwsh dev-scripts/restore.ps1 -DbName rrit -DumpFile /Users/jeff/Downloads/2020-01-23-dev.tar

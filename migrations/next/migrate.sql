@@ -401,6 +401,61 @@ CREATE TABLE
 		)
 	);
 
+CREATE TABLE
+	core.subscription_period_distribution (
+		provider core.subscription_provider,
+		provider_period_id text,
+		CONSTRAINT
+			subscription_period_distribution_pkey
+		PRIMARY KEY (
+			provider,
+			provider_period_id
+		),
+		CONSTRAINT
+			subscription_period_distribution_period_fkey
+		FOREIGN KEY (
+			provider,
+			provider_period_id
+		)
+		REFERENCES
+			core.subscription_period (
+				provider,
+				provider_period_id
+			),
+		date_created timestamp NOT NULL,
+		platform_amount int NOT NULL,
+		provider_amount int NOT NULL,
+		unknown_author_minutes_read int NOT NULL,
+		unknown_author_amount int NOT NULL
+	);
+
+CREATE TABLE
+	core.subscription_period_author_distribution (
+		provider core.subscription_provider,
+		provider_period_id text,
+		CONSTRAINT
+			subscription_period_author_distribution_distribution_fkey
+		FOREIGN KEY (
+			provider,
+			provider_period_id
+		)
+		REFERENCES
+			core.subscription_period_distribution (
+				provider,
+				provider_period_id
+			),
+		author_id int,
+		CONSTRAINT
+			subscription_period_author_distribution_pkey
+		PRIMARY KEY (
+			provider,
+			provider_period_id,
+			author_id
+		),
+		minutes_read int NOT NULL,
+		amount int NOT NULL
+	);
+
 -- create new subscriptions schema, views and api functions
 CREATE SCHEMA
 	subscriptions;
@@ -1124,4 +1179,545 @@ AS $$
 	WHERE
 		price.provider = create_custom_price.provider::core.subscription_provider AND
 		price.custom_amount = create_custom_price.amount;
+$$;
+
+CREATE TYPE
+	subscriptions.subscription_distribution_author_calculation AS (
+		author_id int,
+		minutes_read int,
+		amount int
+	);
+
+CREATE TYPE
+	subscriptions.subscription_distribution_calculation AS (
+		platform_amount int,
+		provider_amount int,
+		unknown_author_minutes_read int,
+		unknown_author_amount int,
+		author_distributions subscriptions.subscription_distribution_author_calculation[]
+	);
+
+CREATE FUNCTION
+	subscriptions.calculate_distribution_for_period(
+		provider text,
+		provider_period_id text
+	)
+RETURNS
+	subscriptions.subscription_distribution_calculation
+LANGUAGE
+	plpgsql
+AS $$
+<<locals>>
+DECLARE
+	period core.subscription_period;
+	subscription_amount int;
+	platform_amount int;
+	payment_provider_amount int;
+	author_total_amount int;
+	unknown_author_minutes_read int;
+	unknown_author_amount int;
+	author_distributions subscriptions.subscription_distribution_author_calculation[];
+BEGIN
+	-- get the subscription period
+	SELECT
+		subscription_period.*
+	INTO
+		locals.period
+	FROM
+		core.subscription_period
+	WHERE
+		subscription_period.provider = calculate_distribution_for_period.provider::core.subscription_provider AND
+		subscription_period.provider_period_id = calculate_distribution_for_period.provider_period_id;
+	-- get the subscription amount
+	SELECT
+		price_level.amount
+	INTO
+		locals.subscription_amount
+	FROM
+		subscriptions.price_level
+	WHERE
+		price_level.provider = locals.period.provider AND
+		price_level.provider_price_id = locals.period.provider_price_id;
+	-- calculate the platform fee amount
+	locals.platform_amount := round(locals.subscription_amount * 0.05);
+	-- calculate the payment provider fee amount
+	locals.payment_provider_amount := (
+		CASE
+			locals.period.provider
+		WHEN
+			'apple'::core.subscription_provider
+		THEN
+			-- app store small business program 15% commission
+			round(locals.subscription_amount * 0.15)
+		WHEN
+			'stripe'::core.subscription_provider
+		THEN
+			-- payments percentage-based commission
+			round(
+				locals.subscription_amount * (
+					-- base 2.9% commission
+					0.029 +
+					-- international 1% commission
+					(
+						SELECT
+							CASE
+							WHEN
+								payment_method.country != 'US'
+							THEN
+								0.01
+							ELSE
+								0
+							END
+						FROM
+							core.subscription_payment_method AS payment_method
+						WHERE
+							payment_method.provider = locals.period.provider AND
+							payment_method.provider_payment_method_id = locals.period.provider_payment_method_id
+					)
+				)
+			) +
+			-- payments flat-rate $0.30 commission
+			30 +
+			-- billing 0.5% commission (applied separately from payments commission so needs to be rounded separately)
+			round(locals.subscription_amount * 0.005)
+		END
+	);
+	-- calculate the amount left for the authors
+	locals.author_total_amount := locals.subscription_amount - locals.platform_amount - locals.payment_provider_amount;
+	-- calculate the individual author amounts based on their share of minutes read
+	CREATE TEMPORARY TABLE
+		author_distribution
+	AS (
+		WITH period_read AS (
+			SELECT
+				article.id,
+				article.word_count
+			FROM
+				core.user_article
+				JOIN
+					core.article ON
+						article.id = user_article.article_id
+			WHERE
+				user_article.user_account_id = (
+					SELECT
+						subscription_account.user_account_id
+					FROM
+						core.subscription
+						JOIN core.subscription_account ON
+							subscription.provider = subscription_account.provider AND
+							subscription.provider_account_id = subscription_account.provider_account_id
+					WHERE
+						subscription.provider = locals.period.provider AND
+						subscription.provider_subscription_id = locals.period.provider_subscription_id
+				) AND
+				user_article.date_completed <@ tsrange(locals.period.begin_date, locals.period.end_date)
+		),
+		read_author_share AS (
+			SELECT
+				article_author.author_id,
+				(
+					core.estimate_article_length(period_read.word_count)::decimal /
+					count(*) OVER (PARTITION BY period_read.id)
+				) AS minutes_read
+			FROM
+				period_read
+				LEFT JOIN
+					core.article_author ON
+						period_read.id = article_author.article_id
+		)
+		SELECT
+			read_author_share.author_id,
+			sum(read_author_share.minutes_read) AS minutes_read,
+			round(
+				(
+					sum(read_author_share.minutes_read) /
+					(
+						SELECT
+							sum(
+								core.estimate_article_length(period_read.word_count)
+							)
+						FROM
+							period_read
+					)
+				) *
+				locals.author_total_amount
+			)::int AS amount
+		FROM
+			read_author_share
+		GROUP BY
+			read_author_share.author_id
+	);
+	-- absorb any difference between the author total amount and individual distributions caused by rounding into the platform fee
+	locals.platform_amount := locals.platform_amount + (
+			locals.author_total_amount -
+			(
+				SELECT
+					coalesce(
+						sum(author_distribution.amount)::int,
+						0
+					)
+				FROM
+					author_distribution
+			)
+		);
+	-- select the unknown author distribution
+	SELECT
+		author_distribution.minutes_read,
+		author_distribution.amount
+	INTO
+		locals.unknown_author_minutes_read,
+		locals.unknown_author_amount
+	FROM
+		author_distribution
+	WHERE
+		author_distribution.author_id IS NULL;
+	-- select the author distributions
+	locals.author_distributions := ARRAY (
+		SELECT
+			(
+				author_distribution.author_id,
+				author_distribution.minutes_read,
+				author_distribution.amount
+			)::subscriptions.subscription_distribution_author_calculation
+		FROM
+			author_distribution
+		WHERE
+			author_distribution.author_id IS NOT NULL
+	);
+	-- clean up the temp table
+	DROP TABLE
+		author_distribution;
+	-- return the calculation
+	RETURN (
+		locals.platform_amount,
+		locals.payment_provider_amount,
+		coalesce(locals.unknown_author_minutes_read, 0),
+		coalesce(locals.unknown_author_amount, 0),
+		locals.author_distributions
+	);
+END;
+$$;
+
+CREATE TYPE
+	subscriptions.subscription_distribution_author_report AS (
+		author_id bigint,
+		author_name text,
+		author_slug text,
+		minutes_read int,
+		amount int
+	);
+
+CREATE TYPE
+	subscriptions.subscription_distribution_report AS (
+		subscription_amount int,
+		platform_amount int,
+		apple_amount int,
+		stripe_amount int,
+		unknown_author_minutes_read int,
+		unknown_author_amount int,
+		author_distributions subscriptions.subscription_distribution_author_report[]
+	);
+
+CREATE FUNCTION
+	subscriptions.run_distribution_report_for_period_calculation(
+		provider text,
+		provider_period_id text
+	)
+RETURNS
+	subscriptions.subscription_distribution_report
+LANGUAGE
+	sql
+STABLE
+AS $$
+	SELECT
+		(
+			SELECT
+				price_level.amount
+			FROM
+				core.subscription_period AS period
+				JOIN
+					subscriptions.price_level ON
+						period.provider = price_level.provider AND
+						period.provider_price_id = price_level.provider_price_id
+			WHERE
+				period.provider = run_distribution_report_for_period_calculation.provider::core.subscription_provider AND
+				period.provider_period_id = run_distribution_report_for_period_calculation.provider_period_id
+		),
+		calculation.platform_amount,
+		CASE
+			WHEN
+				run_distribution_report_for_period_calculation.provider = 'apple'
+			THEN
+				calculation.provider_amount
+			ELSE
+				0
+		END,
+		CASE
+			WHEN
+				run_distribution_report_for_period_calculation.provider = 'stripe'
+			THEN
+				calculation.provider_amount
+			ELSE
+				0
+		END,
+		calculation.unknown_author_minutes_read,
+		calculation.unknown_author_amount,
+		ARRAY (
+			SELECT
+				(
+					author.id,
+					author.name,
+					author.slug,
+					author_distribution.minutes_read,
+					author_distribution.amount
+				)::subscriptions.subscription_distribution_author_report
+			FROM
+				unnest(calculation.author_distributions) AS author_distribution (
+					author_id,
+					minutes_read,
+					amount
+				)
+				JOIN
+					core.author ON
+						author_distribution.author_id = author.id
+		)
+	FROM
+		subscriptions.calculate_distribution_for_period(
+			provider := run_distribution_report_for_period_calculation.provider,
+			provider_period_id := run_distribution_report_for_period_calculation.provider_period_id
+		) AS calculation (
+			platform_amount,
+			provider_amount,
+			unknown_author_minutes_read,
+			unknown_author_amount,
+			author_distributions
+		);
+$$;
+
+CREATE FUNCTION
+	subscriptions.create_distribution_for_period(
+		provider text,
+		provider_period_id text
+	)
+RETURNS
+	SETOF core.subscription_period_distribution
+LANGUAGE
+	plpgsql
+AS $$
+-- ON CONFLICT column names cannot be distinguished from parameters in plpgsql
+#variable_conflict use_column
+<<locals>>
+DECLARE
+	calculation subscriptions.subscription_distribution_calculation;
+	distribution core.subscription_period_distribution;
+BEGIN
+	-- first run the calculation
+	SELECT
+		result.*
+	INTO
+		locals.calculation
+	FROM
+		subscriptions.calculate_distribution_for_period(
+			provider := create_distribution_for_period.provider,
+			provider_period_id := create_distribution_for_period.provider_period_id
+		) AS result;
+	-- attempt to insert the period distribution
+	INSERT INTO
+		core.subscription_period_distribution (
+			provider,
+			provider_period_id,
+			date_created,
+			platform_amount,
+			provider_amount,
+			unknown_author_minutes_read,
+			unknown_author_amount
+		)
+	VALUES (
+		create_distribution_for_period.provider::core.subscription_provider,
+		create_distribution_for_period.provider_period_id,
+		core.utc_now(),
+		locals.calculation.platform_amount,
+		locals.calculation.provider_amount,
+		locals.calculation.unknown_author_minutes_read,
+		locals.calculation.unknown_author_amount
+	)
+	ON CONFLICT (
+		provider,
+		provider_period_id
+	)
+	DO NOTHING
+	RETURNING
+		*
+	INTO
+		locals.distribution;
+	-- check if the insert was successful
+	IF
+		NOT (locals.distribution IS NULL)
+	THEN
+		-- clear to insert author distributions
+		INSERT INTO
+			core.subscription_period_author_distribution (
+				provider,
+				provider_period_id,
+				author_id,
+				minutes_read,
+				amount
+			)
+		SELECT
+			locals.distribution.provider,
+			locals.distribution.provider_period_id,
+			author_distribution.author_id,
+			author_distribution.minutes_read,
+			author_distribution.amount
+		FROM
+			unnest(locals.calculation.author_distributions) AS author_distribution (
+				author_id,
+				minutes_read,
+				amount
+			);
+		-- return distribution
+		RETURN NEXT
+			locals.distribution;
+	END IF;
+END;
+$$;
+
+CREATE FUNCTION
+	subscriptions.create_distributions_for_completed_periods()
+RETURNS
+	SETOF core.subscription_period_distribution
+LANGUAGE
+	sql
+AS $$
+	WITH completed_period AS (
+		SELECT
+			period.provider,
+			period.provider_period_id
+		FROM
+			core.subscription_period AS period
+			LEFT JOIN
+				core.subscription_period_distribution AS distribution ON
+					period.provider = distribution.provider AND
+					period.provider_period_id = distribution.provider_period_id
+		WHERE
+			period.end_date <= core.utc_now() AND
+			distribution.provider_period_id IS NULL
+		)
+	SELECT
+		(distribution).*
+	FROM
+		(
+			SELECT
+				subscriptions.create_distribution_for_period(
+					provider := completed_period.provider::text,
+					provider_period_id := completed_period.provider_period_id
+				)
+			FROM
+				completed_period
+		) AS result (distribution);
+$$;
+
+CREATE FUNCTION
+	subscriptions.run_distribution_report_for_period_distributions(
+		user_account_id bigint
+	)
+RETURNS
+	subscriptions.subscription_distribution_report
+LANGUAGE
+	sql
+STABLE
+AS $$
+	WITH user_distribution AS (
+		SELECT
+			distribution.provider,
+			distribution.provider_period_id,
+			price_level.amount AS subscription_amount,
+			distribution.platform_amount,
+			CASE
+				WHEN
+					distribution.provider = 'apple'::core.subscription_provider
+				THEN
+					distribution.provider_amount
+				ELSE
+					0
+			END AS apple_amount,
+			CASE
+				WHEN
+					distribution.provider = 'stripe'::core.subscription_provider
+				THEN
+					distribution.provider_amount
+				ELSE
+					0
+			END AS stripe_amount,
+			distribution.unknown_author_minutes_read,
+			distribution.unknown_author_amount
+		FROM
+			core.subscription_period_distribution AS distribution
+			JOIN
+				core.subscription_period AS period ON
+					period.provider = distribution.provider AND
+					period.provider_period_id = distribution.provider_period_id
+			JOIN
+				subscriptions.price_level ON
+					period.provider = price_level.provider AND
+					period.provider_price_id = price_level.provider_price_id
+			JOIN
+				core.subscription ON
+					subscription.provider = period.provider AND
+					subscription.provider_subscription_id = period.provider_subscription_id
+			JOIN
+				core.subscription_account AS account ON
+					subscription.provider = account.provider AND
+					subscription.provider_account_id = account.provider_account_id
+		WHERE
+			account.user_account_id = run_distribution_report_for_period_distributions.user_account_id
+	)
+	SELECT
+		coalesce(
+			sum(user_distribution.subscription_amount)::int,
+			0
+		),
+		coalesce(
+			sum(user_distribution.platform_amount)::int,
+			0
+		),
+		coalesce(
+			sum(user_distribution.apple_amount)::int,
+			0
+		),
+		coalesce(
+			sum(user_distribution.stripe_amount)::int,
+			0
+		),
+		coalesce(
+			sum(user_distribution.unknown_author_minutes_read)::int,
+			0
+		),
+		coalesce(
+			sum(user_distribution.unknown_author_amount)::int,
+			0
+		),
+		ARRAY (
+			SELECT
+				(
+					author.id,
+					author.name,
+					author.slug,
+					sum(author_distribution.minutes_read),
+					sum(author_distribution.amount)
+				)::subscriptions.subscription_distribution_author_report
+			FROM
+				user_distribution
+				JOIN
+					core.subscription_period_author_distribution AS author_distribution ON
+						user_distribution.provider = author_distribution.provider AND
+						user_distribution.provider_period_id = author_distribution.provider_period_id
+				JOIN
+					core.author ON
+						author_distribution.author_id = author.id
+			GROUP BY
+				author.id
+		)
+	FROM
+		user_distribution;
 $$;

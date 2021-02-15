@@ -9,15 +9,19 @@ CREATE TABLE
    core.subscription_account (
    	provider core.subscription_provider,
    	provider_account_id text,
+   	CONSTRAINT
+   		subscription_account_pkey
    	PRIMARY KEY (
    	   provider,
    	   provider_account_id
 		),
    	user_account_id bigint
+   		CONSTRAINT
+   			subscription_account_user_account_fkey
    	   REFERENCES
    	      core.user_account (id),
 		CONSTRAINT
-		   subscription_account_user_account_id_null_check
+		   subscription_account_user_account_null_check
 		CHECK (
 		   user_account_id IS NOT NULL OR
 		   provider = 'apple'::core.subscription_provider
@@ -26,7 +30,7 @@ CREATE TABLE
 	);
 
 CREATE UNIQUE INDEX
-   subscription_account_unique_user_account_assignment ON
+   subscription_account_user_account_unique_assignment_idx ON
 		core.subscription_account (
 			user_account_id
 		)
@@ -86,11 +90,15 @@ CREATE TABLE
    core.subscription_payment_method (
 		provider core.subscription_provider,
 		provider_payment_method_id text,
+		CONSTRAINT
+			subscription_payment_method_pkey
 		PRIMARY KEY (
 		   provider,
 		   provider_payment_method_id
 		),
 		provider_account_id text NOT NULL,
+		CONSTRAINT
+			subscription_payment_method_account_fkey
 		FOREIGN KEY (
 		   provider,
 		   provider_account_id
@@ -104,6 +112,8 @@ CREATE TABLE
 		wallet core.subscription_payment_method_wallet NOT NULL,
 		brand core.subscription_payment_method_brand NOT NULL,
 		last_four_digits char (4) NOT NULL
+			CONSTRAINT
+				subscription_payment_method_last_four_digits_pattern_check
 			CHECK (
 				last_four_digits SIMILAR TO '[0-9]{4}'
 			),
@@ -116,11 +126,15 @@ CREATE TABLE
 		provider core.subscription_provider,
 		provider_payment_method_id text,
 		date_created timestamp,
+		CONSTRAINT
+			subscription_payment_method_version_pkey
 		PRIMARY KEY (
 			provider,
 			provider_payment_method_id,
 			date_created
 		),
+		CONSTRAINT
+			subscription_payment_method_version_payment_method_fkey
 		FOREIGN KEY (
 			provider,
 			provider_payment_method_id
@@ -157,11 +171,15 @@ CREATE TABLE
    	provider core.subscription_provider,
    	provider_account_id text,
    	date_assigned timestamp,
+   	CONSTRAINT
+   		subscription_default_payment_method_pkey
    	PRIMARY KEY (
    	   provider,
    	   provider_account_id,
    	   date_assigned
 		),
+		CONSTRAINT
+			subscription_default_payment_method_account_fkey
 		FOREIGN KEY (
 		   provider,
 		   provider_account_id
@@ -173,6 +191,8 @@ CREATE TABLE
 			),
    	date_unassigned timestamp,
    	provider_payment_method_id text NOT NULL,
+   	CONSTRAINT
+   		subscription_default_payment_method_payment_method_fkey
 		FOREIGN KEY (
 		   provider,
 		   provider_payment_method_id
@@ -185,7 +205,7 @@ CREATE TABLE
 	);
 
 CREATE UNIQUE INDEX
-	subscription_default_payment_method_single_assignment_idx ON
+	subscription_default_payment_method_unique_assignment_idx ON
 		core.subscription_default_payment_method (
 			provider,
 			provider_account_id
@@ -195,7 +215,10 @@ WHERE
 
 CREATE TABLE
 	core.subscription_level (
-		id int PRIMARY KEY,
+		id int
+			CONSTRAINT
+				subscription_level_pkey
+			PRIMARY KEY,
 		name text NOT NULL,
 		amount int NOT NULL
 	);
@@ -204,17 +227,21 @@ CREATE TABLE
    core.subscription_price (
    	provider core.subscription_provider,
    	provider_price_id text,
+   	CONSTRAINT
+   		subscription_price_pkey
    	PRIMARY KEY (
    	   provider,
    	   provider_price_id
 		),
    	date_created timestamp NOT NULL,
    	level_id int
+   		CONSTRAINT
+   			subscription_price_level_fkey
    		REFERENCES
    			core.subscription_level (id),
    	custom_amount int,
    	CONSTRAINT
-   		subscription_price_amount_check
+   		subscription_price_level_or_custom_amount_null_check
    	CHECK (
    		(
    			level_id IS NULL AND
@@ -225,10 +252,14 @@ CREATE TABLE
    			custom_amount IS NULL
    		)
    	),
+   	CONSTRAINT
+   		subscription_price_unique_level_idx
    	UNIQUE (
    		provider,
    		level_id
    	),
+   	CONSTRAINT
+   		subscription_price_unique_custom_amount_idx
    	UNIQUE (
    		provider,
 			custom_amount
@@ -245,11 +276,15 @@ CREATE TABLE
    core.subscription (
    	provider core.subscription_provider,
    	provider_subscription_id text,
+   	CONSTRAINT
+   		subscription_pkey
    	PRIMARY KEY (
    	   provider,
    	   provider_subscription_id
 		),
    	provider_account_id text NOT NULL,
+   	CONSTRAINT
+   		subscription_account_fkey
    	FOREIGN KEY (
 		   provider,
 			provider_account_id
@@ -280,12 +315,16 @@ CREATE TYPE
 CREATE TABLE
 	core.subscription_period (
 		provider core.subscription_provider,
-		provider_period_id text, -- apple (web_order_line_item_id), stripe (invoice.id)
+		provider_period_id text,
+		CONSTRAINT
+			subscription_period_pkey
 		PRIMARY KEY (
 		   provider,
 		   provider_period_id
 		),
 		provider_subscription_id text NOT NULL,
+		CONSTRAINT
+			subscription_period_subscription_fkey
 		FOREIGN KEY (
 		   provider,
 		   provider_subscription_id
@@ -296,6 +335,8 @@ CREATE TABLE
 			   provider_subscription_id
 			),
 		provider_price_id text NOT NULL,
+		CONSTRAINT
+			subscription_period_price_fkey
 		FOREIGN KEY (
 		   provider,
 		   provider_price_id
@@ -306,6 +347,8 @@ CREATE TABLE
 		      provider_price_id
 			),
 		provider_payment_method_id text,
+		CONSTRAINT
+			subscription_period_payment_method_fkey
 		FOREIGN KEY (
 			provider,
 			provider_payment_method_id
@@ -325,7 +368,7 @@ CREATE TABLE
 		begin_date timestamp NOT NULL,
 		end_date timestamp NOT NULL,
 		CONSTRAINT
-			subscription_period_range_check
+			subscription_period_date_range_check
 		CHECK (
 			begin_date < end_date
 		),

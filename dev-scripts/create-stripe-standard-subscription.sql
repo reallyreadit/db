@@ -1,3 +1,5 @@
+\pset pager off
+
 \echo 'Creating subscription account...'
 
 SELECT

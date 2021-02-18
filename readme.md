@@ -54,6 +54,8 @@ Create a standard Stripe subscription:
 
 Create a Stripe subscription with a custom price:
 
+Note: Due to script limitations two users cannot share the same custom price.
+
     psql --dbname=rrit --file=dev-scripts/create-stripe-custom-subscription.sql -v id="'1'" -v user="'jeff'" -v price=5000 -v begin="'2021-02-01T00:05:00'" -v end="'2021-03-01T00:05:00'" -v card_brand="'visa'" -v card_digits="'1234'" -v card_country="'US'" -v card_exp_month=1 -v card_exp_year=2022
 ### Creating Subscription Distributions
 After a subscription period ends a subscription period distribution needs to be created in order to "lock in" the distribution calculation for that period. Execute the following SQL command to create subscription distributions for any subscription periods that have ended.

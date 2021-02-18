@@ -461,6 +461,21 @@ CREATE SCHEMA
 	subscriptions;
 
 CREATE VIEW
+	subscriptions.price_level AS
+SELECT
+	price.provider,
+	price.provider_price_id,
+	price.date_created,
+	price.level_id,
+	level.name,
+	coalesce(level.amount, price.custom_amount) AS amount
+FROM
+	core.subscription_price AS price
+	LEFT JOIN
+		core.subscription_level AS level ON
+			price.level_id = level.id;
+
+CREATE VIEW
 	subscriptions.current_payment_method AS
 SELECT
 	method.provider,
@@ -557,8 +572,8 @@ SELECT
 	(
 		latest_period.provider_period_id,
 		latest_period.provider_price_id,
-		level.name,
-		coalesce(level.amount, price.custom_amount),
+		price_level.name,
+		price_level.amount,
 		latest_period.provider_payment_method_id,
 		latest_period.begin_date,
 		latest_period.end_date,
@@ -579,12 +594,9 @@ FROM
 			subscription.provider = latest_period.provider AND
 			subscription.provider_subscription_id = latest_period.provider_subscription_id
 	JOIN
-		core.subscription_price AS price ON
-			latest_period.provider = price.provider AND
-			latest_period.provider_price_id = price.provider_price_id
-	LEFT JOIN
-		core.subscription_level AS level ON
-			price.level_id = level.id;
+		subscriptions.price_level ON
+			latest_period.provider = price_level.provider AND
+			latest_period.provider_price_id = price_level.provider_price_id;
 
 CREATE VIEW
 	subscriptions.user_account_subscription_status AS
@@ -1081,22 +1093,8 @@ AS $$
 		status.provider_account_id = get_subscription_status_for_subscription_account.provider_account_id;
 $$;
 
-CREATE VIEW
-	subscriptions.price_level AS
-SELECT
-	price.provider,
-	price.provider_price_id,
-	price.date_created,
-	level.name,
-	level.amount
-FROM
-	core.subscription_price AS price
-	JOIN
-		core.subscription_level AS level ON
-			price.level_id = level.id;
-
 CREATE FUNCTION
-	subscriptions.get_price_levels_for_provider(
+	subscriptions.get_standard_price_levels_for_provider(
 		provider text
 	)
 RETURNS
@@ -1106,11 +1104,12 @@ LANGUAGE
 	sql
 AS $$
 	SELECT
-		price.*
+		price_level.*
 	FROM
-		subscriptions.price_level AS price
+		subscriptions.price_level
 	WHERE
-		price.provider = get_price_levels_for_provider.provider::core.subscription_provider;
+		price_level.provider = get_standard_price_levels_for_provider.provider::core.subscription_provider AND
+		price_level.level_id IS NOT NULL;
 $$;
 
 CREATE FUNCTION

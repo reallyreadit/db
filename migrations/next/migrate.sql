@@ -1003,6 +1003,16 @@ AS $$
 	)
 	DO UPDATE
 		SET
+			provider_payment_method_id = (
+				CASE
+					WHEN
+						subscription_period.payment_status = 'requires_confirmation'::core.subscription_payment_status
+					THEN
+						create_or_update_subscription_period.provider_payment_method_id
+					ELSE
+						subscription_period.provider_payment_method_id
+				END
+			),
 			payment_status = (
 				CASE
 					WHEN

@@ -1003,7 +1003,16 @@ AS $$
 	)
 	DO UPDATE
 		SET
-			payment_status = create_or_update_subscription_period.payment_status::core.subscription_payment_status,
+			payment_status = (
+				CASE
+					WHEN
+						subscription_period.payment_status = 'requires_confirmation'::core.subscription_payment_status
+					THEN
+						create_or_update_subscription_period.payment_status::core.subscription_payment_status
+					ELSE
+						subscription_period.payment_status
+				END
+			),
 			date_paid = coalesce(subscription_period.date_paid, create_or_update_subscription_period.date_paid),
 			date_refunded = coalesce(subscription_period.date_refunded, create_or_update_subscription_period.date_refunded),
 			refund_reason = coalesce(subscription_period.refund_reason, create_or_update_subscription_period.refund_reason)

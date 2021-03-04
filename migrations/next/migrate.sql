@@ -1031,32 +1031,6 @@ AS $$
 $$;
 
 CREATE FUNCTION
-	subscriptions.update_subscription_period_payment_status(
-		provider text,
-		provider_period_id text,
-		provider_payment_method_id text,
-		payment_status text,
-		date_paid timestamp
-	)
-RETURNS
-	SETOF core.subscription_period
-LANGUAGE
-	sql
-AS $$
-	UPDATE
-		core.subscription_period AS period
-	SET
-		provider_payment_method_id = update_subscription_period_payment_status.provider_payment_method_id,
-		payment_status = update_subscription_period_payment_status.payment_status::core.subscription_payment_status,
-		date_paid = coalesce(period.date_paid, update_subscription_period_payment_status.date_paid)
-	WHERE
-		period.provider = update_subscription_period_payment_status.provider::core.subscription_provider AND
-		period.provider_period_id = update_subscription_period_payment_status.provider_period_id
-	RETURNING
-		*;
-$$;
-
-CREATE FUNCTION
 	subscriptions.get_subscription_statuses_for_user_account(
 		user_account_id bigint
 	)

@@ -600,22 +600,21 @@ FROM
 
 CREATE VIEW
 	subscriptions.user_account_subscription_status AS
-SELECT
-	latest_status.user_account_id,
-	latest_status.provider,
-	latest_status.provider_account_id,
-	latest_status.provider_subscription_id,
-	latest_status.date_created,
-	latest_status.date_terminated,
-	latest_status.latest_period
+SELECT DISTINCT ON (
+	status.user_account_id
+)
+	status.user_account_id,
+	status.provider,
+	status.provider_account_id,
+	status.provider_subscription_id,
+	status.date_created,
+	status.date_terminated,
+	status.latest_period
 FROM
-	subscriptions.subscription_status AS latest_status
-	LEFT JOIN
-		subscriptions.subscription_status AS later_status ON
-			latest_status.user_account_id = later_status.user_account_id AND
-			greatest((latest_status.latest_period).date_created, (latest_status.latest_period).date_paid) < greatest((later_status.latest_period).date_created, (later_status.latest_period).date_paid)
-WHERE
-	(later_status.latest_period).provider_period_id IS NULL;
+	subscriptions.subscription_status AS status
+ORDER BY
+	status.user_account_id,
+	greatest((status.latest_period).date_created, (status.latest_period).date_paid) DESC;
 
 CREATE FUNCTION
    subscriptions.get_subscription_accounts_for_user_account(

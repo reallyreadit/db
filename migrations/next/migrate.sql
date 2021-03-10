@@ -521,28 +521,28 @@ WHERE
 
 CREATE VIEW
 	subscriptions.latest_subscription_period AS
-SELECT
-	latest_period.provider,
-	latest_period.provider_period_id,
-	latest_period.provider_subscription_id,
-	latest_period.provider_price_id,
-	latest_period.provider_payment_method_id,
-	latest_period.begin_date,
-	latest_period.end_date,
-	latest_period.date_created,
-	latest_period.payment_status,
-	latest_period.date_paid,
-	latest_period.date_refunded,
-	latest_period.refund_reason
+SELECT DISTINCT ON (
+	period.provider,
+	period.provider_subscription_id
+)
+	period.provider,
+	period.provider_period_id,
+	period.provider_subscription_id,
+	period.provider_price_id,
+	period.provider_payment_method_id,
+	period.begin_date,
+	period.end_date,
+	period.date_created,
+	period.payment_status,
+	period.date_paid,
+	period.date_refunded,
+	period.refund_reason
 FROM
-	core.subscription_period AS latest_period
-	LEFT JOIN
-		core.subscription_period AS later_period ON
-			latest_period.provider = later_period.provider AND
-			latest_period.provider_subscription_id = later_period.provider_subscription_id AND
-			latest_period.date_created < later_period.date_created
-WHERE
-	later_period.provider_period_id IS NULL;
+	core.subscription_period AS period
+ORDER BY
+	period.provider,
+	period.provider_subscription_id,
+	period.date_created DESC;;
 
 CREATE TYPE
 	subscriptions.subscription_status_latest_period AS (

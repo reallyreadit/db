@@ -542,7 +542,9 @@ FROM
 ORDER BY
 	period.provider,
 	period.provider_subscription_id,
-	period.date_created DESC;;
+	period.date_created DESC;
+
+
 
 CREATE TYPE
 	subscriptions.subscription_status_latest_period AS (

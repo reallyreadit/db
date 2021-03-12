@@ -138,7 +138,7 @@ WHERE
 UPDATE
 	core.new_platform_notification_request
 SET
-	email_address = 'anon@localhost',
+	email_address = 'anon@readup.com',
 	ip_address = '0.0.0.0'
 WHERE
 	TRUE;
@@ -156,7 +156,7 @@ WHERE
 UPDATE
 	core.user_account
 SET
-	email = user_account.name || '@localhost',
+	email = user_account.name || '@readup.com',
 	-- sets password = 'password'
 	password_hash = E'\\x4B0C6BA854E085CA2C6E014EE461000187C6D9C28FBDFC96AD7B203F8CC4E6BF',
 	password_salt = E'\\x00000000000000000000000000000000',

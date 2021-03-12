@@ -401,6 +401,44 @@ CREATE TABLE
 	);
 
 CREATE TABLE
+	core.subscription_renewal_status_change (
+		id bigserial,
+		CONSTRAINT
+			subscription_renewal_status_change_pkey
+		PRIMARY KEY (
+			id
+		),
+		provider core.subscription_provider NOT NULL,
+		provider_subscription_id text NOT NULL,
+		CONSTRAINT
+			subscription_renewal_status_change_subscription_fkey
+		FOREIGN KEY (
+			provider,
+			provider_subscription_id
+		)
+		REFERENCES
+			core.subscription (
+				provider,
+				provider_subscription_id
+			),
+		date_created timestamp NOT NULL,
+		auto_renew_enabled bool NOT NULL,
+		provider_price_id text,
+		CONSTRAINT
+			subscription_renewal_status_change_price_fkey
+		FOREIGN KEY (
+			provider,
+			provider_price_id
+		)
+		REFERENCES
+			core.subscription_price (
+				provider,
+				provider_price_id
+			),
+		expiration_intent text
+	);
+
+CREATE TABLE
 	core.subscription_period_distribution (
 		provider core.subscription_provider,
 		provider_period_id text,
@@ -543,7 +581,25 @@ ORDER BY
 	period.provider_subscription_id,
 	period.date_created DESC;
 
-
+CREATE VIEW
+	subscriptions.latest_subscription_renewal_status_change AS
+SELECT DISTINCT ON (
+	change.provider,
+	change.provider_subscription_id
+)
+	change.id,
+	change.provider,
+	change.provider_subscription_id,
+	change.date_created,
+	change.auto_renew_enabled,
+	change.provider_price_id,
+	change.expiration_intent
+FROM
+	core.subscription_renewal_status_change AS change
+ORDER BY
+	change.provider,
+	change.provider_subscription_id,
+	change.id DESC;
 
 CREATE TYPE
 	subscriptions.subscription_status_latest_period AS (
@@ -559,6 +615,15 @@ CREATE TYPE
 		date_paid timestamp,
 		date_refunded timestamp,
 		refund_reason text
+	);
+
+CREATE TYPE
+	subscriptions.subscription_status_latest_renewal_status_change AS (
+		date_created timestamp,
+		auto_renew_enabled bool,
+		provider_price_id text,
+		price_level_name text,
+		price_amount int
 	);
 
 CREATE VIEW
@@ -583,7 +648,21 @@ SELECT
 		latest_period.date_paid,
 		latest_period.date_refunded,
 		latest_period.refund_reason
-	)::subscriptions.subscription_status_latest_period AS latest_period
+	)::subscriptions.subscription_status_latest_period AS latest_period,
+	CASE
+		WHEN
+			latest_renewal_change.id IS NOT NULL
+		THEN
+			(
+				latest_renewal_change.date_created,
+				latest_renewal_change.auto_renew_enabled,
+				latest_renewal_change.provider_price_id,
+				renewal_price_level.name,
+				renewal_price_level.amount
+			)::subscriptions.subscription_status_latest_renewal_status_change
+		ELSE
+			NULL::subscriptions.subscription_status_latest_renewal_status_change
+	END AS latest_renewal_status_change
 FROM
 	core.subscription
 	JOIN
@@ -597,7 +676,16 @@ FROM
 	JOIN
 		subscriptions.price_level ON
 			latest_period.provider = price_level.provider AND
-			latest_period.provider_price_id = price_level.provider_price_id;
+			latest_period.provider_price_id = price_level.provider_price_id
+	LEFT JOIN
+		subscriptions.latest_subscription_renewal_status_change AS latest_renewal_change ON
+			subscription.provider = latest_renewal_change.provider AND
+			subscription.provider_subscription_id = latest_renewal_change.provider_subscription_id AND
+			tsrange(latest_period.begin_date, latest_period.end_date) @> latest_renewal_change.date_created
+	LEFT JOIN
+		subscriptions.price_level AS renewal_price_level ON
+			latest_renewal_change.provider = renewal_price_level.provider AND
+			latest_renewal_change.provider_price_id = renewal_price_level.provider_price_id;
 
 CREATE VIEW
 	subscriptions.user_account_subscription_status AS
@@ -610,7 +698,8 @@ SELECT DISTINCT ON (
 	status.provider_subscription_id,
 	status.date_created,
 	status.latest_receipt,
-	status.latest_period
+	status.latest_period,
+	status.latest_renewal_status_change
 FROM
 	subscriptions.subscription_status AS status
 ORDER BY
@@ -1025,6 +1114,42 @@ AS $$
 	RETURNING
 		*;
 $$;
+
+CREATE FUNCTION
+	subscriptions.create_subscription_renewal_status_change(
+		provider text,
+		provider_subscription_id text,
+		date_created timestamp,
+		auto_renew_enabled bool,
+		provider_price_id text,
+		expiration_intent text
+	)
+RETURNS
+	SETOF core.subscription_renewal_status_change
+LANGUAGE
+	sql
+AS $$
+	INSERT INTO
+		core.subscription_renewal_status_change (
+			provider,
+			provider_subscription_id,
+			date_created,
+			auto_renew_enabled,
+			provider_price_id,
+			expiration_intent
+		)
+	VALUES (
+		create_subscription_renewal_status_change.provider::core.subscription_provider,
+		create_subscription_renewal_status_change.provider_subscription_id,
+		create_subscription_renewal_status_change.date_created,
+		create_subscription_renewal_status_change.auto_renew_enabled,
+		create_subscription_renewal_status_change.provider_price_id,
+		create_subscription_renewal_status_change.expiration_intent
+	)
+	RETURNING
+		*;
+$$;
+
 
 CREATE FUNCTION
 	subscriptions.get_subscription_statuses_for_user_account(

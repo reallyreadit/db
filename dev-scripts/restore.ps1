@@ -23,7 +23,7 @@ psql --command="DROP DATABASE IF EXISTS $DbName"
 
 Write-Host 'Creating database...'
 psql --command="CREATE DATABASE $DbName"
-psql --dbname=$DbName --command='ALTER DATABASE rrit SET search_path TO core'
+psql --dbname=$DbName --command="ALTER DATABASE $DbName SET search_path TO core"
 psql --dbname=$DbName --command='DROP SCHEMA public'
 
 Write-Host 'Restoring dump file...'

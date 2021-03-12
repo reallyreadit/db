@@ -54,7 +54,8 @@ TRUNCATE TABLE
 	core.subscription_payment_method_version,
 	core.subscription_period,
 	core.subscription_period_author_distribution,
-	core.subscription_period_distribution;
+	core.subscription_period_distribution,
+	core.subscription_renewal_status_change;
 
 /*
 Insert required preferences with default values and disabling notifications.

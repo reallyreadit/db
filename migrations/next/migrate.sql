@@ -295,7 +295,6 @@ CREATE TABLE
 				provider_account_id
 			),
 		date_created timestamp NOT NULL,
-		date_terminated timestamp,
    	latest_receipt core.base64_text,
    	CONSTRAINT
    		subscription_latest_receipt_null_check
@@ -912,7 +911,6 @@ CREATE FUNCTION
 		provider_subscription_id text,
 		provider_account_id text,
 		date_created timestamp,
-		date_terminated timestamp,
 		latest_receipt text
 	)
 RETURNS
@@ -926,7 +924,6 @@ AS $$
 			provider_subscription_id,
 			provider_account_id,
 			date_created,
-			date_terminated,
 			latest_receipt
 		)
 	VALUES (
@@ -934,7 +931,6 @@ AS $$
 		create_or_update_subscription.provider_subscription_id,
 		create_or_update_subscription.provider_account_id,
 		create_or_update_subscription.date_created,
-		create_or_update_subscription.date_terminated,
 		create_or_update_subscription.latest_receipt
 	)
 	ON CONFLICT (
@@ -943,7 +939,6 @@ AS $$
 	)
 	DO UPDATE
 		SET
-			date_terminated = coalesce(subscription.date_terminated, create_or_update_subscription.date_terminated),
 			latest_receipt = coalesce(create_or_update_subscription.latest_receipt, subscription.latest_receipt)
 	RETURNING
 		*;

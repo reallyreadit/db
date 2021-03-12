@@ -570,7 +570,7 @@ SELECT
 	account.provider_account_id,
 	subscription.provider_subscription_id,
 	subscription.date_created,
-	subscription.date_terminated,
+	subscription.latest_receipt,
 	(
 		latest_period.provider_period_id,
 		latest_period.provider_price_id,
@@ -610,7 +610,7 @@ SELECT DISTINCT ON (
 	status.provider_account_id,
 	status.provider_subscription_id,
 	status.date_created,
-	status.date_terminated,
+	status.latest_receipt,
 	status.latest_period
 FROM
 	subscriptions.subscription_status AS status

@@ -30,7 +30,7 @@ Run the following PowerShell script to restore a database dump, supplying the de
 - The script cannot proceed if there are active connections to an existing database. If you receive the active connections notice then you may need to stop the `api` server or close any active connections from any other SQL clients you may have running.
 - It is normal to receive a warning about a failure to refresh the materialized views. This is an issue with `pg_restore` and the materialized views will be refreshed manually before the script finishes.
 <!--end list-->
-    pwsh dev-scripts/restore.ps1 -DbName rrit -DumpFile /Users/jeff/Downloads/2020-01-23-dev.tar
+    pwsh dev-scripts/restore.ps1 -DbName rrit -DumpFile /Users/jeff/Downloads/2021-01-23-dev.tar
 ### Creating Subscriptions
 Creating subscriptions using the Apple and Stripe test servers can be tedious and time-consuming. As an alternative you can use the following SQL scripts to create subscriptions directly in the database, bypassing the payment providers.
 

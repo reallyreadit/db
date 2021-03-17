@@ -1227,71 +1227,69 @@ AS $$
 $$;
 
 CREATE FUNCTION
-	subscriptions.get_custom_price_for_provider(
+	subscriptions.get_custom_price_level_for_provider(
 		provider text,
 		amount int
 	)
 RETURNS
-	SETOF core.subscription_price
+	SETOF subscriptions.price_level
 STABLE
 LANGUAGE
 	sql
 AS $$
 	SELECT
-		price.*
+		price_level.*
 	FROM
-		core.subscription_price AS price
+		subscriptions.price_level
 	WHERE
-		price.provider = get_custom_price_for_provider.provider::core.subscription_provider AND
-		price.custom_amount = get_custom_price_for_provider.amount;
+		price_level.provider = get_custom_price_level_for_provider.provider::core.subscription_provider AND
+		price_level.amount = get_custom_price_level_for_provider.amount;
 $$;
 
 CREATE FUNCTION
-	subscriptions.create_custom_price(
+	subscriptions.create_custom_price_level(
 		provider text,
 		provider_price_id text,
 		date_created timestamp,
 		amount int
 	)
 RETURNS
-	SETOF core.subscription_price
+	SETOF subscriptions.price_level
 LANGUAGE
-	sql
+	plpgsql
 AS $$
-	WITH new_price AS (
-		INSERT INTO
-			core.subscription_price (
-				provider,
-				provider_price_id,
-				date_created,
-				custom_amount
-			)
-		VALUES (
-			create_custom_price.provider::core.subscription_provider,
-			create_custom_price.provider_price_id,
-			create_custom_price.date_created,
-			create_custom_price.amount
-		)
-		ON CONFLICT (
+-- ON CONFLICT column names cannot be distinguished from parameters in plpgsql
+#variable_conflict use_column
+BEGIN
+	-- insert the new price
+	INSERT INTO
+		core.subscription_price (
 			provider,
+			provider_price_id,
+			date_created,
 			custom_amount
 		)
-		DO NOTHING
-		RETURNING
-			*
+	VALUES (
+		create_custom_price_level.provider::core.subscription_provider,
+		create_custom_price_level.provider_price_id,
+		create_custom_price_level.date_created,
+		create_custom_price_level.amount
 	)
+	ON CONFLICT (
+		provider,
+		custom_amount
+	)
+	DO NOTHING;
+	-- return the price_level
+	RETURN QUERY
 	SELECT
-		new_price.*
+		*
 	FROM
-		new_price
-	UNION
-	SELECT
-		price.*
-	FROM
-		core.subscription_price AS price
-	WHERE
-		price.provider = create_custom_price.provider::core.subscription_provider AND
-		price.custom_amount = create_custom_price.amount;
+		subscriptions.get_custom_price_level_for_provider(
+			provider := create_custom_price_level.provider,
+			amount := create_custom_price_level.amount
+		);
+END;
 $$;
 
 CREATE TYPE

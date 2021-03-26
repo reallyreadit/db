@@ -579,7 +579,7 @@ FROM
 ORDER BY
 	period.provider,
 	period.provider_subscription_id,
-	period.date_created DESC;
+	greatest(period.date_created, period.date_paid) DESC;
 
 CREATE VIEW
 	subscriptions.latest_subscription_renewal_status_change AS

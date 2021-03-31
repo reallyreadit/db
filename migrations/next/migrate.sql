@@ -366,6 +366,7 @@ CREATE TABLE
 		),
 		begin_date timestamp NOT NULL,
 		end_date timestamp NOT NULL,
+		renewal_grace_period_end_date timestamp NOT NULL,
 		CONSTRAINT
 			subscription_period_date_range_check
 		CHECK (
@@ -397,7 +398,20 @@ CREATE TABLE
 			) OR (
 				date_refunded IS NOT NULL AND refund_reason IS NOT NULL
 			)
+		),
+		next_provider_period_id text,
+		CONSTRAINT
+			subscription_period_next_period_fkey
+		FOREIGN KEY (
+			provider,
+			next_provider_period_id
 		)
+		REFERENCES
+			core.subscription_period (
+				provider,
+				provider_period_id
+			),
+		prorated_price_amount int
 	);
 
 CREATE TABLE
@@ -569,11 +583,14 @@ SELECT DISTINCT ON (
 	period.provider_payment_method_id,
 	period.begin_date,
 	period.end_date,
+	period.renewal_grace_period_end_date,
 	period.date_created,
 	period.payment_status,
 	period.date_paid,
 	period.date_refunded,
-	period.refund_reason
+	period.refund_reason,
+	period.next_provider_period_id,
+	period.prorated_price_amount
 FROM
 	core.subscription_period AS period
 ORDER BY
@@ -610,6 +627,7 @@ CREATE TYPE
 		provider_payment_method_id text,
 		begin_date timestamp,
 		end_date timestamp,
+		renewal_grace_period_end_date timestamp,
 		date_created timestamp,
 		payment_status core.subscription_payment_status,
 		date_paid timestamp,
@@ -643,6 +661,7 @@ SELECT
 		latest_period.provider_payment_method_id,
 		latest_period.begin_date,
 		latest_period.end_date,
+		latest_period.renewal_grace_period_end_date,
 		latest_period.date_created,
 		latest_period.payment_status,
 		latest_period.date_paid,
@@ -1046,13 +1065,22 @@ CREATE FUNCTION
 		payment_status text,
 		date_paid timestamp,
 		date_refunded timestamp,
-		refund_reason text
+		refund_reason text,
+		proration_discount int
 	)
 RETURNS
 	SETOF core.subscription_period
 LANGUAGE
-	sql
+	plpgsql
 AS $$
+-- ON CONFLICT column names cannot be distinguished from parameters in plpgsql
+#variable_conflict use_column
+<<locals>>
+DECLARE
+	current_period core.subscription_period;
+	prev_unlinked_period core.subscription_period;
+BEGIN
+	-- insert a new period or update an existing one
 	INSERT INTO
 		core.subscription_period (
 			provider,
@@ -1062,6 +1090,7 @@ AS $$
 			provider_payment_method_id,
 			begin_date,
 			end_date,
+			renewal_grace_period_end_date,
 			date_created,
 			payment_status,
 			date_paid,
@@ -1076,6 +1105,7 @@ AS $$
 		create_or_update_subscription_period.provider_payment_method_id,
 		create_or_update_subscription_period.begin_date,
 		create_or_update_subscription_period.end_date,
+		create_or_update_subscription_period.end_date + '1 hour'::interval,
 		create_or_update_subscription_period.date_created,
 		create_or_update_subscription_period.payment_status::core.subscription_payment_status,
 		create_or_update_subscription_period.date_paid,
@@ -1112,7 +1142,76 @@ AS $$
 			date_refunded = coalesce(subscription_period.date_refunded, create_or_update_subscription_period.date_refunded),
 			refund_reason = coalesce(subscription_period.refund_reason, create_or_update_subscription_period.refund_reason)
 	RETURNING
-		*;
+		*
+	INTO
+		locals.current_period;
+	-- check for a previous period that is not linked to the current period
+	SELECT
+		period.*
+	INTO
+		locals.prev_unlinked_period
+	FROM
+		core.subscription_period AS period
+	WHERE
+		period.provider = locals.current_period.provider AND
+		period.provider_subscription_id = locals.current_period.provider_subscription_id AND
+		period.begin_date < locals.current_period.begin_date AND
+		period.renewal_grace_period_end_date >= locals.current_period.begin_date AND
+		period.date_paid IS NOT NULL AND
+		period.date_refunded IS NULL AND
+		period.next_provider_period_id IS NULL
+	FOR UPDATE;
+	IF
+		NOT (locals.prev_unlinked_period IS NULL)
+	THEN
+		-- link the previous period to the current period and set the prorated price if necessary
+		UPDATE
+			core.subscription_period
+		SET
+			next_provider_period_id = locals.current_period.provider_period_id,
+			prorated_price_amount = (
+				CASE
+					WHEN
+						locals.current_period.begin_date < locals.prev_unlinked_period.end_date
+					THEN
+						(
+							SELECT
+								CASE
+									WHEN
+										create_or_update_subscription_period.proration_discount IS NOT NULL
+									THEN
+										price_level.amount - create_or_update_subscription_period.proration_discount
+									ELSE
+										round(
+											(
+												extract('epoch' FROM (locals.current_period.begin_date - locals.prev_unlinked_period.begin_date)) /
+												extract('epoch' FROM (locals.prev_unlinked_period.end_date - locals.prev_unlinked_period.begin_date))
+											) *
+											price_level.amount
+										)
+								END
+							FROM
+								subscriptions.price_level
+							WHERE
+								price_level.provider = locals.prev_unlinked_period.provider AND
+								price_level.provider_price_id = locals.prev_unlinked_period.provider_price_id
+						)
+				END
+			)
+		WHERE
+			subscription_period.provider = locals.prev_unlinked_period.provider AND
+			subscription_period.provider_period_id = locals.prev_unlinked_period.provider_period_id;
+		-- create a distribution for the previous period
+		PERFORM
+			subscriptions.create_distribution_for_period(
+				provider := locals.prev_unlinked_period.provider::text,
+				provider_period_id := locals.prev_unlinked_period.provider_period_id
+			);
+	END IF;
+	-- return the current period
+	RETURN NEXT
+		locals.current_period;
+END;
 $$;
 
 CREATE FUNCTION
@@ -1321,6 +1420,7 @@ AS $$
 <<locals>>
 DECLARE
 	period core.subscription_period;
+	effective_period_range tsrange;
 	subscription_amount int;
 	platform_amount int;
 	payment_provider_amount int;
@@ -1339,20 +1439,40 @@ BEGIN
 	WHERE
 		subscription_period.provider = calculate_distribution_for_period.provider::core.subscription_provider AND
 		subscription_period.provider_period_id = calculate_distribution_for_period.provider_period_id;
-	-- get the subscription amount
-	SELECT
-		price_level.amount
-	INTO
-		locals.subscription_amount
-	FROM
-		subscriptions.price_level
-	WHERE
-		price_level.provider = locals.period.provider AND
-		price_level.provider_price_id = locals.period.provider_price_id;
-	-- calculate the platform fee amount
-	locals.platform_amount := round(locals.subscription_amount * 0.05);
+	-- calculate the effective period range
+	IF
+		locals.period.next_provider_period_id IS NOT NULL
+	THEN
+		SELECT
+			tsrange(locals.period.begin_date, next_period.begin_date, '[)')
+		INTO
+			locals.effective_period_range
+		FROM
+			core.subscription_period AS next_period
+		WHERE
+			next_period.provider = locals.period.provider AND
+			next_period.provider_period_id = locals.period.next_provider_period_id;
+	ELSE
+		locals.effective_period_range := tsrange(locals.period.begin_date, locals.period.renewal_grace_period_end_date, '[)');
+	END IF;
+	-- get the subscription amount, checking for a prorated amount first
+	IF
+		locals.period.prorated_price_amount IS NOT NULL
+	THEN
+		locals.subscription_amount := locals.period.prorated_price_amount;
+	ELSE
+		SELECT
+			price_level.amount
+		INTO
+			locals.subscription_amount
+		FROM
+			subscriptions.price_level
+		WHERE
+			price_level.provider = locals.period.provider AND
+			price_level.provider_price_id = locals.period.provider_price_id;
+	END IF;
 	-- calculate the payment provider fee amount
-	locals.payment_provider_amount := (
+	locals.payment_provider_amount := least(
 		CASE
 			locals.period.provider
 		WHEN
@@ -1391,10 +1511,23 @@ BEGIN
 			30 +
 			-- billing 0.5% commission (applied separately from payments commission so needs to be rounded separately)
 			round(locals.subscription_amount * 0.005)
-		END
+		END,
+		-- prorated subscriptions could potentially be less than the flat-rate commission
+		locals.subscription_amount
+	);
+	-- calculate the platform fee amount
+	locals.platform_amount := greatest(
+		least(
+			round(locals.subscription_amount * 0.05),
+			locals.subscription_amount - locals.payment_provider_amount
+		),
+		0
 	);
 	-- calculate the amount left for the authors
-	locals.author_total_amount := locals.subscription_amount - locals.platform_amount - locals.payment_provider_amount;
+	locals.author_total_amount := greatest(
+		locals.subscription_amount - locals.payment_provider_amount - locals.platform_amount,
+		0
+	);
 	-- calculate the individual author amounts based on their share of minutes read
 	CREATE TEMPORARY TABLE
 		author_distribution
@@ -1421,7 +1554,7 @@ BEGIN
 						subscription.provider = locals.period.provider AND
 						subscription.provider_subscription_id = locals.period.provider_subscription_id
 				) AND
-				user_article.date_completed <@ tsrange(locals.period.begin_date, locals.period.end_date)
+				user_article.date_completed <@ locals.effective_period_range
 		),
 		read_author_share AS (
 			SELECT
@@ -1543,7 +1676,7 @@ AS $$
 	SELECT
 		(
 			SELECT
-				price_level.amount
+				coalesce(period.prorated_price_amount, price_level.amount)
 			FROM
 				core.subscription_period AS period
 				JOIN
@@ -1694,7 +1827,9 @@ END;
 $$;
 
 CREATE FUNCTION
-	subscriptions.create_distributions_for_completed_periods()
+	subscriptions.create_distributions_for_lapsed_periods(
+		user_account_id bigint
+	)
 RETURNS
 	SETOF core.subscription_period_distribution
 LANGUAGE
@@ -1706,12 +1841,28 @@ AS $$
 			period.provider_period_id
 		FROM
 			core.subscription_period AS period
+			JOIN
+				core.subscription ON
+					period.provider = subscription.provider AND
+					period.provider_subscription_id = subscription.provider_subscription_id
+			JOIN
+				core.subscription_account ON
+					subscription.provider = subscription_account.provider AND
+					subscription.provider_account_id = subscription_account.provider_account_id
 			LEFT JOIN
 				core.subscription_period_distribution AS distribution ON
 					period.provider = distribution.provider AND
 					period.provider_period_id = distribution.provider_period_id
 		WHERE
-			period.end_date <= core.utc_now() AND
+			CASE
+				WHEN
+					create_distributions_for_lapsed_periods.user_account_id IS NOT NULL
+				THEN
+					subscription_account.user_account_id = create_distributions_for_lapsed_periods.user_account_id
+				ELSE
+					TRUE
+			END AND
+			period.renewal_grace_period_end_date < core.utc_now() AND
 			distribution.provider_period_id IS NULL
 		)
 	SELECT
@@ -1742,7 +1893,7 @@ AS $$
 		SELECT
 			distribution.provider,
 			distribution.provider_period_id,
-			price_level.amount AS subscription_amount,
+			coalesce(period.prorated_price_amount, price_level.amount) AS subscription_amount,
 			distribution.platform_amount,
 			CASE
 				WHEN

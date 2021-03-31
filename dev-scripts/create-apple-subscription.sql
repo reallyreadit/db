@@ -29,7 +29,6 @@ FROM
 		provider_subscription_id := 'test_sub_' || :id,
 		provider_account_id := 'test_cus_' || :id,
 		date_created := :begin,
-		date_terminated := NULL,
 		latest_receipt := '0'
 	);
 
@@ -58,5 +57,6 @@ FROM
 		payment_status := 'succeeded',
 		date_paid := :begin,
 		date_refunded := NULL,
-		refund_reason := NULL
+		refund_reason := NULL,
+		proration_discount := NULL
 	);

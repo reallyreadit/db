@@ -1,3 +1,9 @@
+-- add a new cached column to user_account for fast subscription status checking
+ALTER TABLE
+	core.user_account
+ADD COLUMN
+	subscription_end_date timestamp;
+
 -- create new core subscription types and tables
 CREATE TYPE
    core.subscription_provider AS enum (
@@ -1077,8 +1083,22 @@ AS $$
 #variable_conflict use_column
 <<locals>>
 DECLARE
+	user_account_id CONSTANT bigint := (
+		SELECT
+			subscription_account.user_account_id
+		FROM
+			core.subscription_account
+			JOIN
+				core.subscription ON
+					subscription_account.provider = subscription.provider AND
+					subscription_account.provider_account_id = subscription.provider_account_id
+		WHERE
+			subscription.provider = create_or_update_subscription_period.provider::core.subscription_provider AND
+			subscription.provider_subscription_id = create_or_update_subscription_period.provider_subscription_id
+	);
 	current_period core.subscription_period;
 	prev_unlinked_period core.subscription_period;
+	current_status subscriptions.subscription_status;
 BEGIN
 	-- insert a new period or update an existing one
 	INSERT INTO
@@ -1208,6 +1228,29 @@ BEGIN
 				provider_period_id := locals.prev_unlinked_period.provider_period_id
 			);
 	END IF;
+	-- update the cached user_account column with the current status
+	SELECT
+		*
+	INTO
+		locals.current_status
+	FROM
+		subscriptions.get_current_subscription_status_for_user_account(
+			user_account_id := locals.user_account_id
+		);
+	UPDATE
+		core.user_account
+	SET
+		subscription_end_date = (
+			CASE WHEN
+				(locals.current_status.latest_period).payment_status = 'succeeded'::core.subscription_payment_status
+			THEN
+				(locals.current_status.latest_period).renewal_grace_period_end_date
+			ELSE
+				NULL::timestamp
+			END
+		)
+	WHERE
+		user_account.id = locals.user_account_id;
 	-- return the current period
 	RETURN NEXT
 		locals.current_period;

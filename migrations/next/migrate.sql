@@ -559,7 +559,12 @@ CREATE TABLE
 				provider,
 				provider_period_id
 			),
-		prorated_price_amount int
+		prorated_price_amount int,
+		CONSTRAINT
+			subscription_period_prorated_price_amount_null_check
+		CHECK (
+			prorated_price_amount IS NULL OR next_provider_period_id IS NOT NULL
+		)
 	);
 
 CREATE TABLE

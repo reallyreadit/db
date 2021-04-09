@@ -1405,6 +1405,26 @@ END;
 $$;
 
 CREATE FUNCTION
+	subscriptions.get_subscription_period(
+		provider text,
+		provider_period_id text
+	)
+RETURNS
+	SETOF core.subscription_period
+LANGUAGE
+	sql
+STABLE
+AS $$
+	SELECT
+		period.*
+	FROM
+		core.subscription_period AS period
+	WHERE
+		period.provider = get_subscription_period.provider::core.subscription_provider AND
+		period.provider_period_id = get_subscription_period.provider_period_id;
+$$;
+
+CREATE FUNCTION
 	subscriptions.create_subscription_renewal_status_change(
 		provider text,
 		provider_subscription_id text,

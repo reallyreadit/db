@@ -1389,7 +1389,8 @@ BEGIN
 	SET
 		subscription_end_date = (
 			CASE WHEN
-				(locals.current_status.latest_period).payment_status = 'succeeded'::core.subscription_payment_status
+				(locals.current_status.latest_period).payment_status = 'succeeded'::core.subscription_payment_status AND
+				(locals.current_status.latest_period).date_refunded IS NULL
 			THEN
 				(locals.current_status.latest_period).renewal_grace_period_end_date
 			ELSE
@@ -1648,7 +1649,8 @@ BEGIN
 		core.subscription_period
 	WHERE
 		subscription_period.provider = calculate_distribution_for_period.provider::core.subscription_provider AND
-		subscription_period.provider_period_id = calculate_distribution_for_period.provider_period_id;
+		subscription_period.provider_period_id = calculate_distribution_for_period.provider_period_id AND
+		subscription_period.date_refunded IS NULL;
 	-- calculate the effective period range
 	IF
 		locals.period.next_provider_period_id IS NOT NULL
@@ -2073,6 +2075,7 @@ AS $$
 					TRUE
 			END AND
 			period.renewal_grace_period_end_date < core.utc_now() AND
+			period.date_refunded IS NULL AND
 			distribution.provider_period_id IS NULL
 		)
 	SELECT
@@ -2142,7 +2145,8 @@ AS $$
 					subscription.provider = account.provider AND
 					subscription.provider_account_id = account.provider_account_id
 		WHERE
-			account.user_account_id = run_distribution_report_for_period_distributions.user_account_id
+			account.user_account_id = run_distribution_report_for_period_distributions.user_account_id AND
+			period.date_refunded IS NULL
 	)
 	SELECT
 		coalesce(

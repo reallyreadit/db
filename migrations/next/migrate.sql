@@ -146,6 +146,63 @@ BEGIN
 END;
 $$;
 
+-- add functions for author/user_account assignment lookup
+CREATE FUNCTION
+	authors.get_author_by_user_account_name(
+		user_account_name text
+	)
+RETURNS
+	SETOF core.author
+LANGUAGE
+	sql
+STABLE
+AS $$
+	SELECT
+		author.*
+	FROM
+		core.author
+	WHERE
+		author.id = (
+			SELECT
+				assignment.author_id
+			FROM
+				core.author_user_account_assignment AS assignment
+				JOIN
+					core.user_account ON
+						assignment.user_account_id = user_account.id
+			WHERE
+				user_account.name = get_author_by_user_account_name.user_account_name
+		);
+$$;
+
+CREATE FUNCTION
+	authors.get_user_account_by_author_slug(
+		author_slug text
+	)
+RETURNS
+	SETOF core.user_account
+LANGUAGE
+	sql
+STABLE
+AS $$
+	SELECT
+		user_account.*
+	FROM
+		core.user_account
+	WHERE
+		user_account.id = (
+			SELECT
+				assignment.user_account_id
+			FROM
+				core.author_user_account_assignment AS assignment
+				JOIN
+					core.author ON
+						assignment.author_id = author.id
+			WHERE
+				author.slug = get_user_account_by_author_slug.author_slug
+		);
+$$;
+
 -- create new core subscription types and tables
 CREATE TYPE
    core.subscription_provider AS enum (

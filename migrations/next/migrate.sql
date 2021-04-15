@@ -2254,3 +2254,55 @@ AS $$
 	FROM
 		user_distribution;
 $$;
+
+CREATE FUNCTION
+	subscriptions.run_author_distribution_report_for_period_distributions(
+		author_id bigint
+	)
+RETURNS
+	subscriptions.subscription_distribution_author_report
+LANGUAGE
+	sql
+STABLE
+AS $$
+	WITH author_distribution_totals AS (
+		SELECT
+			coalesce(
+				sum(author_distribution.minutes_read)::int,
+				0
+			) AS minutes_read,
+			coalesce(
+				sum(author_distribution.amount)::int,
+				0
+			) AS amount
+		FROM
+			core.subscription_period_author_distribution AS author_distribution
+			JOIN
+				core.subscription_period AS period ON
+					author_distribution.provider = period.provider AND
+					author_distribution.provider_period_id = period.provider_period_id
+		WHERE
+			author_distribution.author_id = run_author_distribution_report_for_period_distributions.author_id AND
+			period.date_refunded IS NULL
+	)
+	SELECT
+		author.id,
+		author.name,
+		author.slug,
+		(
+			SELECT
+				author_distribution_totals.minutes_read
+			FROM
+				author_distribution_totals
+		),
+		(
+			SELECT
+				author_distribution_totals.amount
+			FROM
+				author_distribution_totals
+		)
+	FROM
+		core.author
+	WHERE
+		author.id = run_author_distribution_report_for_period_distributions.author_id;
+$$;

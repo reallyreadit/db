@@ -2361,3 +2361,45 @@ AS $$
 	WHERE
 		author.id = run_author_distribution_report_for_period_distributions.author_id;
 $$;
+
+CREATE FUNCTION
+	subscriptions.calculate_allocation_for_all_periods()
+RETURNS
+	subscriptions.subscription_allocation_calculation
+LANGUAGE
+	sql
+STABLE
+AS $$
+	WITH allocation AS (
+		SELECT
+			(
+				subscriptions.calculate_allocation_for_period(
+					provider := period.provider,
+					subscription_amount := coalesce(
+						period.prorated_price_amount,
+						price_level.amount
+					),
+					payment_method_country := payment_method.country
+				)
+			).*
+		FROM
+			core.subscription_period AS period
+			JOIN
+				subscriptions.price_level ON
+					period.provider = price_level.provider AND
+					period.provider_price_id = price_level.provider_price_id
+			LEFT JOIN
+				core.subscription_payment_method AS payment_method ON
+					period.provider = payment_method.provider AND
+					period.provider_payment_method_id = payment_method.provider_payment_method_id
+		WHERE
+			period.payment_status = 'succeeded'::core.subscription_payment_status AND
+			period.date_refunded IS NULL
+	)
+	SELECT
+		sum(allocation.platform_amount)::int,
+		sum(allocation.provider_amount)::int,
+		sum(allocation.author_amount)::int
+	FROM
+		allocation;
+$$;

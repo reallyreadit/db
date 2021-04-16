@@ -1667,6 +1667,89 @@ CREATE TYPE
 	);
 
 CREATE TYPE
+	subscriptions.subscription_allocation_calculation AS (
+		platform_amount int,
+		provider_amount int,
+		author_amount int
+	);
+
+CREATE FUNCTION
+	subscriptions.calculate_allocation_for_period(
+		provider core.subscription_provider,
+		subscription_amount int,
+		payment_method_country core.iso_alpha_2_country_code
+	)
+RETURNS
+	subscriptions.subscription_allocation_calculation
+LANGUAGE
+	plpgsql
+IMMUTABLE
+AS $$
+<<locals>>
+DECLARE
+	provider_amount int;
+	platform_amount int;
+	author_amount int;
+BEGIN
+	-- calculate the payment provider fee amount
+	locals.provider_amount := least(
+		CASE
+			calculate_allocation_for_period.provider
+		WHEN
+			'apple'::core.subscription_provider
+		THEN
+			-- app store small business program 15% commission
+			round(calculate_allocation_for_period.subscription_amount * 0.15)
+		WHEN
+			'stripe'::core.subscription_provider
+		THEN
+			-- payments percentage-based commission
+			round(
+				calculate_allocation_for_period.subscription_amount * (
+					-- base 2.9% commission
+					0.029 +
+					-- international 1% commission
+					CASE
+						WHEN
+							calculate_allocation_for_period.payment_method_country != 'US'::core.iso_alpha_2_country_code
+						THEN
+							0.01
+						ELSE
+							0
+					END
+				)
+			) +
+			-- payments flat-rate $0.30 commission
+			30 +
+			-- billing 0.5% commission (applied separately from payments commission so needs to be rounded separately)
+			round(calculate_allocation_for_period.subscription_amount * 0.005)
+		END,
+		-- prorated subscriptions could potentially be less than the flat-rate commission
+		calculate_allocation_for_period.subscription_amount
+	);
+	-- calculate the platform fee amount
+	locals.platform_amount := greatest(
+		least(
+			round(calculate_allocation_for_period.subscription_amount * 0.05),
+			calculate_allocation_for_period.subscription_amount - locals.provider_amount
+		),
+		0
+	);
+	-- calculate the amount left for the authors
+	locals.author_amount := greatest(
+		calculate_allocation_for_period.subscription_amount - locals.provider_amount - locals.platform_amount,
+		0
+	);
+	-- return the calculation
+	RETURN (
+		locals.platform_amount,
+		locals.provider_amount,
+		locals.author_amount
+	);
+END;
+$$;
+
+CREATE TYPE
 	subscriptions.subscription_distribution_calculation AS (
 		platform_amount int,
 		provider_amount int,
@@ -1690,9 +1773,7 @@ DECLARE
 	period core.subscription_period;
 	effective_period_range tsrange;
 	subscription_amount int;
-	platform_amount int;
-	payment_provider_amount int;
-	author_total_amount int;
+	allocation subscriptions.subscription_allocation_calculation;
 	unknown_author_minutes_read int;
 	unknown_author_amount int;
 	author_distributions subscriptions.subscription_distribution_author_calculation[];
@@ -1740,63 +1821,37 @@ BEGIN
 			price_level.provider = locals.period.provider AND
 			price_level.provider_price_id = locals.period.provider_price_id;
 	END IF;
-	-- calculate the payment provider fee amount
-	locals.payment_provider_amount := least(
-		CASE
-			locals.period.provider
-		WHEN
-			'apple'::core.subscription_provider
-		THEN
-			-- app store small business program 15% commission
-			round(locals.subscription_amount * 0.15)
-		WHEN
-			'stripe'::core.subscription_provider
-		THEN
-			-- payments percentage-based commission
-			round(
-				locals.subscription_amount * (
-					-- base 2.9% commission
-					0.029 +
-					-- international 1% commission
+	-- calculate the allocation
+	SELECT
+		*
+	INTO
+		locals.allocation
+	FROM
+		subscriptions.calculate_allocation_for_period(
+			provider := locals.period.provider,
+			subscription_amount := locals.subscription_amount,
+			payment_method_country := (
+				CASE
+					locals.period.provider
+				WHEN
+					'apple'::core.subscription_provider
+				THEN
+					NULL::iso_alpha_2_country_code
+				WHEN
+					'stripe'::core.subscription_provider
+				THEN
 					(
 						SELECT
-							CASE
-							WHEN
-								payment_method.country != 'US'
-							THEN
-								0.01
-							ELSE
-								0
-							END
+							payment_method.country
 						FROM
 							core.subscription_payment_method AS payment_method
 						WHERE
 							payment_method.provider = locals.period.provider AND
 							payment_method.provider_payment_method_id = locals.period.provider_payment_method_id
 					)
-				)
-			) +
-			-- payments flat-rate $0.30 commission
-			30 +
-			-- billing 0.5% commission (applied separately from payments commission so needs to be rounded separately)
-			round(locals.subscription_amount * 0.005)
-		END,
-		-- prorated subscriptions could potentially be less than the flat-rate commission
-		locals.subscription_amount
-	);
-	-- calculate the platform fee amount
-	locals.platform_amount := greatest(
-		least(
-			round(locals.subscription_amount * 0.05),
-			locals.subscription_amount - locals.payment_provider_amount
-		),
-		0
-	);
-	-- calculate the amount left for the authors
-	locals.author_total_amount := greatest(
-		locals.subscription_amount - locals.payment_provider_amount - locals.platform_amount,
-		0
-	);
+				END
+			)
+		);
 	-- calculate the individual author amounts based on their share of minutes read
 	CREATE TEMPORARY TABLE
 		author_distribution
@@ -1853,7 +1908,7 @@ BEGIN
 							period_read
 					)
 				) *
-				locals.author_total_amount
+				locals.allocation.author_amount
 			)::int AS amount
 		FROM
 			read_author_share
@@ -1861,8 +1916,8 @@ BEGIN
 			read_author_share.author_id
 	);
 	-- absorb any difference between the author total amount and individual distributions caused by rounding into the platform fee
-	locals.platform_amount := locals.platform_amount + (
-			locals.author_total_amount -
+	locals.allocation.platform_amount := locals.allocation.platform_amount + (
+			locals.allocation.author_amount -
 			(
 				SELECT
 					coalesce(
@@ -1902,8 +1957,8 @@ BEGIN
 		author_distribution;
 	-- return the calculation
 	RETURN (
-		locals.platform_amount,
-		locals.payment_provider_amount,
+		locals.allocation.platform_amount,
+		locals.allocation.provider_amount,
 		coalesce(locals.unknown_author_minutes_read, 0),
 		coalesce(locals.unknown_author_amount, 0),
 		locals.author_distributions

@@ -16,7 +16,8 @@ FROM
 			WHERE
 				user_account.name = :user
 		),
-		date_created := :begin
+		date_created := :begin,
+		environment := 'production'
 	);
 
 \echo 'Creating payment method...'

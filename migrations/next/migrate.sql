@@ -210,6 +210,12 @@ CREATE TYPE
       'stripe'
 	);
 
+CREATE TYPE
+	core.subscription_environment AS enum (
+		'production',
+		'sandbox'
+	);
+
 CREATE TABLE
    core.subscription_account (
    	provider core.subscription_provider,
@@ -231,7 +237,8 @@ CREATE TABLE
 		   user_account_id IS NOT NULL OR
 		   provider = 'apple'::core.subscription_provider
 		),
-		date_created timestamp NOT NULL
+		date_created timestamp NOT NULL,
+		environment core.subscription_environment NOT NULL
 	);
 
 CREATE UNIQUE INDEX
@@ -958,7 +965,8 @@ CREATE FUNCTION
    	provider text,
    	provider_account_id text,
    	user_account_id bigint,
-   	date_created timestamp
+   	date_created timestamp,
+   	environment text
 	)
 RETURNS
    SETOF core.subscription_account
@@ -970,13 +978,15 @@ AS $$
    		provider,
    		provider_account_id,
    		user_account_id,
-   		date_created
+   		date_created,
+   		environment
    	)
    VALUES (
    	create_or_update_subscription_account.provider::core.subscription_provider,
    	create_or_update_subscription_account.provider_account_id,
    	create_or_update_subscription_account.user_account_id,
-   	create_or_update_subscription_account.date_created
+   	create_or_update_subscription_account.date_created,
+   	create_or_update_subscription_account.environment::core.subscription_environment
 	)
 	ON CONFLICT (
 		provider,
@@ -2336,9 +2346,18 @@ AS $$
 				core.subscription_period AS period ON
 					author_distribution.provider = period.provider AND
 					author_distribution.provider_period_id = period.provider_period_id
+			JOIN
+				core.subscription ON
+					period.provider = subscription.provider AND
+					period.provider_subscription_id = subscription.provider_subscription_id
+			JOIN
+				core.subscription_account AS account ON
+					subscription.provider = account.provider AND
+					subscription.provider_account_id = account.provider_account_id
 		WHERE
 			author_distribution.author_id = run_author_distribution_report_for_period_distributions.author_id AND
-			period.date_refunded IS NULL
+			period.date_refunded IS NULL AND
+			account.environment = 'production'::core.subscription_environment
 	)
 	SELECT
 		author.id,
@@ -2385,6 +2404,14 @@ AS $$
 		FROM
 			core.subscription_period AS period
 			JOIN
+				core.subscription ON
+					period.provider = subscription.provider AND
+					period.provider_subscription_id = subscription.provider_subscription_id
+			JOIN
+				core.subscription_account AS account ON
+					subscription.provider = account.provider AND
+					subscription.provider_account_id = account.provider_account_id
+			JOIN
 				subscriptions.price_level ON
 					period.provider = price_level.provider AND
 					period.provider_price_id = price_level.provider_price_id
@@ -2394,7 +2421,8 @@ AS $$
 					period.provider_payment_method_id = payment_method.provider_payment_method_id
 		WHERE
 			period.payment_status = 'succeeded'::core.subscription_payment_status AND
-			period.date_refunded IS NULL
+			period.date_refunded IS NULL AND
+			account.environment = 'production'::core.subscription_environment
 	)
 	SELECT
 		sum(allocation.platform_amount)::int,

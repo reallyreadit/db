@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
--- Dumped from database version 9.6.18
+-- Dumped from database version 9.6.20
 -- Dumped by pg_dump version 10.3
 
 SET statement_timeout = 0;
@@ -3483,7 +3483,8 @@ CREATE TABLE core.notification_receipt (
     date_alert_cleared timestamp without time zone,
     via_email boolean DEFAULT false NOT NULL,
     via_extension boolean DEFAULT false NOT NULL,
-    via_push boolean DEFAULT false NOT NULL
+    via_push boolean DEFAULT false NOT NULL,
+    event_type core.notification_event_type NOT NULL
 );
 
 
@@ -3699,14 +3700,16 @@ CREATE FUNCTION notifications.create_aotd_digest_notifications() RETURNS SETOF n
 				user_account_id,
 				via_email,
 				via_extension,
-				via_push
+				via_push,
+				event_type
 			)
 		SELECT
 			(SELECT id FROM aotd_event),
 		    recipient.user_account_id,
 		    TRUE,
 		    FALSE,
-		    FALSE
+		    FALSE,
+		    'aotd_digest'::core.notification_event_type
         FROM
         	recipient
         RETURNING
@@ -3791,7 +3794,8 @@ BEGIN
 				user_account_id,
 				via_email,
 				via_extension,
-				via_push
+				via_push,
+				event_type
 			)
 		(
 			SELECT
@@ -3799,7 +3803,8 @@ BEGIN
 				preference.user_account_id,
 				preference.aotd_via_email,
 				preference.aotd_via_extension,
-				preference.aotd_via_push
+				preference.aotd_via_push,
+				'aotd'::core.notification_event_type
 			FROM
 				notifications.current_preference AS preference
 		)
@@ -3880,14 +3885,16 @@ CREATE FUNCTION notifications.create_company_update_notifications(author_id bigi
 				user_account_id,
 				via_email,
 				via_extension,
-				via_push
+				via_push,
+				event_type
 			)
 		SELECT
 			(SELECT id FROM update_event),
 		    recipient.user_account_id,
 		    TRUE,
 		    FALSE,
-		    FALSE
+		    FALSE,
+		    'company_update'::core.notification_event_type
         FROM
         	recipient
         RETURNING
@@ -4011,14 +4018,19 @@ CREATE FUNCTION notifications.create_follower_digest_notifications(frequency tex
 				user_account_id,
 				via_email,
 				via_extension,
-				via_push
+				via_push,
+				event_type
 			)
 		SELECT
 			recipient_event.event_id,
 		    recipient_event.recipient_id,
 		    TRUE,
 		    FALSE,
-		    FALSE
+		    FALSE,
+		    CASE create_follower_digest_notifications.frequency
+				WHEN 'daily' THEN 'follower_daily_digest'::core.notification_event_type
+				WHEN 'weekly' THEN 'follower_weekly_digest'::core.notification_event_type
+			END
         FROM
         	recipient_event
         RETURNING
@@ -4115,7 +4127,8 @@ BEGIN
 					user_account_id,
 					via_email,
 					via_extension,
-					via_push
+					via_push,
+					event_type
 				)
 			(
 				SELECT
@@ -4123,7 +4136,8 @@ BEGIN
 					create_follower_notification.followee_id,
 					preference.follower_via_email,
 					preference.follower_via_extension,
-					preference.follower_via_push
+					preference.follower_via_push,
+					'follower'::core.notification_event_type
 				FROM
 					notifications.current_preference AS preference
 				WHERE
@@ -4312,14 +4326,19 @@ CREATE FUNCTION notifications.create_loopback_digest_notifications(frequency tex
 				user_account_id,
 				via_email,
 				via_extension,
-				via_push
+				via_push,
+				event_type
 			)
 		SELECT
 			recipient_event.event_id,
 		    recipient_event.recipient_id,
 		    TRUE,
 		    FALSE,
-		    FALSE
+		    FALSE,
+		    CASE create_loopback_digest_notifications.frequency
+				WHEN 'daily' THEN 'loopback_daily_digest'::core.notification_event_type
+				WHEN 'weekly' THEN 'loopback_weekly_digest'::core.notification_event_type
+			END
         FROM
         	recipient_event
         RETURNING
@@ -4416,7 +4435,8 @@ CREATE FUNCTION notifications.create_loopback_notifications(article_id bigint, c
 				user_account_id,
 				via_email,
 				via_extension,
-				via_push
+				via_push,
+				event_type
 			)
 		(
 			SELECT
@@ -4424,7 +4444,8 @@ CREATE FUNCTION notifications.create_loopback_notifications(article_id bigint, c
 				recipient.user_account_id,
 				recipient.loopback_via_email,
 				recipient.loopback_via_extension,
-				recipient.loopback_via_push
+				recipient.loopback_via_push,
+				'loopback'::core.notification_event_type
 			FROM
 				recipient
 		)
@@ -4579,14 +4600,19 @@ CREATE FUNCTION notifications.create_post_digest_notifications(frequency text) R
 				user_account_id,
 				via_email,
 				via_extension,
-				via_push
+				via_push,
+				event_type
 			)
 		SELECT
 			recipient_event.event_id,
 		    recipient_event.recipient_id,
 		    TRUE,
 		    FALSE,
-		    FALSE
+		    FALSE,
+		    CASE create_post_digest_notifications.frequency
+				WHEN 'daily' THEN 'post_daily_digest'::core.notification_event_type
+				WHEN 'weekly' THEN 'post_weekly_digest'::core.notification_event_type
+			END
         FROM
         	recipient_event
         RETURNING
@@ -4681,7 +4707,8 @@ CREATE FUNCTION notifications.create_post_notifications(article_id bigint, poste
 				user_account_id,
 				via_email,
 				via_extension,
-				via_push
+				via_push,
+				event_type
 			)
 		(
 			SELECT
@@ -4689,7 +4716,8 @@ CREATE FUNCTION notifications.create_post_notifications(article_id bigint, poste
 				recipient.user_account_id,
 				recipient.post_via_email,
 				recipient.post_via_extension,
-				recipient.post_via_push
+				recipient.post_via_push,
+				'post'::core.notification_event_type
 			FROM
 				recipient
 		)
@@ -4888,14 +4916,19 @@ CREATE FUNCTION notifications.create_reply_digest_notifications(frequency text) 
 				user_account_id,
 				via_email,
 				via_extension,
-				via_push
+				via_push,
+				event_type
 			)
 		SELECT
 			recipient_event.event_id,
 		    recipient_event.recipient_id,
 		    TRUE,
 		    FALSE,
-		    FALSE
+		    FALSE,
+		    CASE create_reply_digest_notifications.frequency
+				WHEN 'daily' THEN 'reply_daily_digest'::core.notification_event_type
+				WHEN 'weekly' THEN 'reply_weekly_digest'::core.notification_event_type
+			END
         FROM
         	recipient_event
         RETURNING
@@ -4996,7 +5029,8 @@ BEGIN
 					user_account_id,
 					via_email,
 					via_extension,
-					via_push
+					via_push,
+					event_type
 				)
 			(
 				SELECT
@@ -5004,7 +5038,8 @@ BEGIN
 					locals.parent_author_id,
 					preference.reply_via_email,
 					preference.reply_via_extension,
-					preference.reply_via_push
+					preference.reply_via_push,
+					'reply'::core.notification_event_type
 				FROM
 					notifications.current_preference AS preference
 				WHERE
@@ -5082,14 +5117,16 @@ CREATE FUNCTION notifications.create_transactional_notification(user_account_id 
 				user_account_id,
 				via_email,
 				via_extension,
-				via_push
+				via_push,
+				event_type
 			)
 		SELECT
 			(SELECT id FROM transactional_event),
 		    create_transactional_notification.user_account_id,
 		    TRUE,
 		    FALSE,
-		    FALSE
+		    FALSE,
+		    create_transactional_notification.event_type::core.notification_event_type
         RETURNING
         	id
 	)
@@ -10775,6 +10812,14 @@ ALTER TABLE ONLY core.notification_event
 
 
 --
+-- Name: notification_event notification_event_type_reference; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.notification_event
+    ADD CONSTRAINT notification_event_type_reference UNIQUE (type, id);
+
+
+--
 -- Name: notification_interaction notification_interaction_pkey; Type: CONSTRAINT; Schema: core; Owner: -
 --
 
@@ -11665,11 +11710,11 @@ ALTER TABLE ONLY core.notification_push_device
 
 
 --
--- Name: notification_receipt notification_receipt_event_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+-- Name: notification_receipt notification_receipt_event_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
 --
 
 ALTER TABLE ONLY core.notification_receipt
-    ADD CONSTRAINT notification_receipt_event_id_fkey FOREIGN KEY (event_id) REFERENCES core.notification_event(id);
+    ADD CONSTRAINT notification_receipt_event_fkey FOREIGN KEY (event_id, event_type) REFERENCES core.notification_event(id, type);
 
 
 --

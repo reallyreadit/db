@@ -1355,21 +1355,21 @@ BEGIN
 			provider_payment_method_id = (
 				CASE
 					WHEN
-						subscription_period.payment_status = 'requires_confirmation'::core.subscription_payment_status
+						subscription_period.payment_status = 'succeeded'::core.subscription_payment_status
 					THEN
-						create_or_update_subscription_period.provider_payment_method_id
-					ELSE
 						subscription_period.provider_payment_method_id
+					ELSE
+						create_or_update_subscription_period.provider_payment_method_id
 				END
 			),
 			payment_status = (
 				CASE
 					WHEN
-						subscription_period.payment_status = 'requires_confirmation'::core.subscription_payment_status
+						subscription_period.payment_status = 'succeeded'::core.subscription_payment_status
 					THEN
-						create_or_update_subscription_period.payment_status::core.subscription_payment_status
-					ELSE
 						subscription_period.payment_status
+					ELSE
+						create_or_update_subscription_period.payment_status::core.subscription_payment_status
 				END
 			),
 			date_paid = coalesce(subscription_period.date_paid, create_or_update_subscription_period.date_paid),

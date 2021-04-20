@@ -1,3 +1,90 @@
+-- add new notification event type for initial subscription email
+ALTER TYPE
+	core.notification_event_type
+ADD VALUE
+	'initial_subscription'
+AFTER
+	'welcome';
+
+-- prevent duplicate initial_subscription notifications
+CREATE UNIQUE INDEX
+	notification_event_duplicate_user_account_event_idx
+ON
+	core.notification_receipt (
+		user_account_id, event_type
+	)
+WHERE
+	event_type = 'initial_subscription'::core.notification_event_type;
+
+-- update create_transactional_notification to skip data if not provided
+CREATE OR REPLACE FUNCTION
+	notifications.create_transactional_notification(
+		user_account_id bigint,
+		event_type text,
+		email_confirmation_id bigint,
+		password_reset_request_id bigint
+	)
+RETURNS SETOF
+	notifications.email_dispatch
+LANGUAGE
+	sql
+AS $$
+    WITH transactional_event AS (
+		INSERT INTO
+			core.notification_event (type)
+		VALUES
+		    (create_transactional_notification.event_type::core.notification_event_type)
+        RETURNING
+        	id
+	),
+    transactional_data AS (
+      	INSERT INTO
+        	core.notification_data (
+        		event_id,
+        	    email_confirmation_id,
+        	    password_reset_request_id
+			)
+		SELECT
+			transactional_event.id,
+			create_transactional_notification.email_confirmation_id,
+			create_transactional_notification.password_reset_request_id
+		FROM
+			transactional_event
+    	WHERE
+    		create_transactional_notification.email_confirmation_id IS NOT NULL OR
+    		create_transactional_notification.password_reset_request_id IS NOT NULL
+	),
+    receipt AS (
+        INSERT INTO
+			core.notification_receipt (
+				event_id,
+				user_account_id,
+				via_email,
+				via_extension,
+				via_push,
+				event_type
+			)
+		SELECT
+			(SELECT id FROM transactional_event),
+		    create_transactional_notification.user_account_id,
+		    TRUE,
+		    FALSE,
+		    FALSE,
+		    create_transactional_notification.event_type::core.notification_event_type
+        RETURNING
+        	id
+	)
+    SELECT
+        (SELECT id FROM receipt),
+        user_account.id,
+        user_account.name,
+        user_account.email
+    FROM
+    	core.user_account
+    WHERE
+    	id = create_transactional_notification.user_account_id;
+$$;
+
 -- add a new cached column to user_account for fast subscription status checking
 ALTER TABLE
 	core.user_account

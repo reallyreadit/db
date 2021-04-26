@@ -1,3 +1,129 @@
+-- add new author and source lookup functions to query all articles instead of community_reads
+-- leave old community_reads functions in place for backward-compatibility
+CREATE FUNCTION
+	article_api.get_articles_by_author_slug(
+		slug text,
+		user_account_id bigint,
+		page_number integer,
+		page_size integer,
+		min_length integer,
+		max_length integer
+)
+RETURNS SETOF
+	article_api.article_page_result
+LANGUAGE
+	sql
+STABLE
+AS $$
+	WITH author_article AS (
+		SELECT DISTINCT
+			article.id,
+			article.date_published
+		FROM
+			core.article
+			JOIN
+				core.article_author ON
+					article.id = article_author.article_id
+			JOIN
+				core.author ON
+					article_author.author_id = author.id
+		WHERE
+			author.slug = get_articles_by_author_slug.slug AND
+			core.matches_article_length(
+				word_count := article.word_count,
+				min_length := get_articles_by_author_slug.min_length,
+				max_length := get_articles_by_author_slug.max_length
+			)
+	)
+	SELECT
+		articles.*,
+		(
+			SELECT
+				count(*)
+			FROM
+				author_article
+		)
+	FROM
+		article_api.get_articles(
+			user_account_id,
+			VARIADIC ARRAY(
+				SELECT
+					author_article.id
+				FROM
+					author_article
+				ORDER BY
+					author_article.date_published DESC NULLS LAST,
+					author_article.id DESC
+				OFFSET
+					(get_articles_by_author_slug.page_number - 1) * get_articles_by_author_slug.page_size
+				LIMIT
+					get_articles_by_author_slug.page_size
+			)
+		) AS articles;
+$$;
+
+CREATE FUNCTION
+	article_api.get_articles_by_source_slug(
+		slug text,
+		user_account_id bigint,
+		page_number integer,
+		page_size integer,
+		min_length integer,
+		max_length integer
+)
+RETURNS SETOF
+	article_api.article_page_result
+LANGUAGE
+	sql
+STABLE
+AS $$
+	WITH publisher_article AS (
+		SELECT DISTINCT
+			article.id,
+			article.date_published
+		FROM
+			core.article
+		WHERE
+			article.source_id = (
+				SELECT
+					source.id
+				FROM
+					core.source
+				WHERE
+					source.slug = get_articles_by_source_slug.slug
+			) AND
+			core.matches_article_length(
+				word_count := article.word_count,
+				min_length := get_articles_by_source_slug.min_length,
+				max_length := get_articles_by_source_slug.max_length
+			)
+	)
+	SELECT
+		articles.*,
+		(
+			SELECT
+				count(*)
+			FROM
+				publisher_article
+		)
+	FROM
+		article_api.get_articles(
+			user_account_id,
+			VARIADIC ARRAY(
+				SELECT
+					publisher_article.id
+				FROM
+					publisher_article
+				ORDER BY
+					publisher_article.date_published DESC
+				OFFSET
+					(get_articles_by_source_slug.page_number - 1) * get_articles_by_source_slug.page_size
+				LIMIT
+					get_articles_by_source_slug.page_size
+			)
+		) AS articles;
+$$;
+
 -- add new notification event type for initial subscription email
 ALTER TYPE
 	core.notification_event_type

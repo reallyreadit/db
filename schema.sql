@@ -93,6 +93,16 @@ COMMENT ON EXTENSION plpgsql IS 'PL/pgSQL procedural language';
 
 
 --
+-- Name: article_author; Type: TYPE; Schema: article_api; Owner: -
+--
+
+CREATE TYPE article_api.article_author AS (
+	name text,
+	slug text
+);
+
+
+--
 -- Name: article_flair; Type: TYPE; Schema: core; Owner: -
 --
 
@@ -139,7 +149,8 @@ CREATE TYPE article_api.article AS (
 	rating_count integer,
 	first_poster text,
 	flair core.article_flair,
-	aotd_contender_rank integer
+	aotd_contender_rank integer,
+	article_authors article_api.article_author[]
 );
 
 
@@ -174,6 +185,7 @@ CREATE TYPE article_api.article_page_result AS (
 	first_poster text,
 	flair core.article_flair,
 	aotd_contender_rank integer,
+	article_authors article_api.article_author[],
 	total_count bigint
 );
 
@@ -229,6 +241,16 @@ CREATE TYPE core.auth_service_real_user_rating AS ENUM (
     'unknown',
     'unsupported',
     'verified'
+);
+
+
+--
+-- Name: author_assignment_method; Type: TYPE; Schema: core; Owner: -
+--
+
+CREATE TYPE core.author_assignment_method AS ENUM (
+    'metadata',
+    'manual'
 );
 
 
@@ -546,6 +568,7 @@ CREATE TYPE social.article_post_page_result AS (
 	first_poster text,
 	flair core.article_flair,
 	aotd_contender_rank integer,
+	article_authors article_api.article_author[],
 	post_date_created timestamp without time zone,
 	user_name text,
 	comment_id bigint,
@@ -1690,7 +1713,8 @@ CREATE FUNCTION article_api.get_article_for_provisional_user(article_id bigint, 
 	    article.rating_count,
 	    first_poster.name,
 	    article.flair,
-	    article.aotd_contender_rank
+	    article.aotd_contender_rank,
+	    coalesce(article_authors.authors, '{}')
 	FROM
 		core.article
 		JOIN
@@ -1702,14 +1726,16 @@ CREATE FUNCTION article_api.get_article_for_provisional_user(article_id bigint, 
 		LEFT JOIN (
 		    SELECT
 		        article_author.article_id,
-		        array_agg(author.name) AS names
+		        array_agg(author.name) AS names,
+		        array_agg((author.name, author.slug)::article_api.article_author) AS authors
 		    FROM
 		        core.article_author
 		        JOIN
 		            core.author ON
 		                author.id = article_author.author_id
 		    WHERE
-		        article_author.article_id = get_article_for_provisional_user.article_id
+		        article_author.article_id = get_article_for_provisional_user.article_id AND
+		        article_author.date_unassigned IS NULL
 		    GROUP BY
 		        article_author.article_id
         ) AS article_authors ON
@@ -1859,7 +1885,8 @@ CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC articl
 	    article.rating_count,
 	    first_poster.name,
 	    article.flair,
-	    article.aotd_contender_rank
+	    article.aotd_contender_rank,
+	    coalesce(article_authors.authors, '{}')
 	FROM
 		core.article
 		JOIN article_api.article_pages ON
@@ -1871,6 +1898,7 @@ CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC articl
 		    SELECT
 		        article_author.article_id,
 		        array_agg(author.name) AS names,
+		        array_agg((author.name, author.slug)::article_api.article_author) AS authors,
 		        count(author_user_account_assignment.id) > 0 AS user_is_author
 		    FROM
 		        core.article_author
@@ -1880,7 +1908,8 @@ CREATE FUNCTION article_api.get_articles(user_account_id bigint, VARIADIC articl
 		            author_user_account_assignment.author_id = author.id AND
 		            author_user_account_assignment.user_account_id = get_articles.user_account_id
 		    WHERE
-		        article_author.article_id = ANY (get_articles.article_ids)
+		        article_author.article_id = ANY (get_articles.article_ids) AND
+		        article_author.date_unassigned IS NULL
 		    GROUP BY
 		        article_author.article_id
         ) AS article_authors ON
@@ -2290,6 +2319,8 @@ CREATE FUNCTION article_api.score_articles() RETURNS void
 		            core.article_author
 		            JOIN scorable_article ON
 		                scorable_article.id = article_author.article_id
+		        WHERE
+		            article_author.date_unassigned IS NULL
 		        GROUP BY
 		            article_author.article_id
             ) AS article_authors ON
@@ -2785,7 +2816,8 @@ CREATE FUNCTION authors.get_authors_of_article(article_id bigint) RETURNS SETOF 
         JOIN core.author ON
             author.id = article_author.author_id
     WHERE
-        article_author.article_id = get_authors_of_article.article_id;
+        article_author.article_id = get_authors_of_article.article_id AND
+        article_author.date_unassigned IS NULL;
 $$;
 
 
@@ -2887,7 +2919,8 @@ CREATE FUNCTION community_reads.get_articles_by_author_slug(slug text, user_acco
 				community_read.word_count,
 			    get_articles_by_author_slug.min_length,
 			    get_articles_by_author_slug.max_length
-			)
+			) AND
+			article_author.date_unassigned IS NULL
 	)
     SELECT
     	articles.*,
@@ -3209,7 +3242,8 @@ CREATE FUNCTION community_reads.search_articles(user_account_id bigint, page_num
             END AND
             CASE WHEN array_length(search_articles.author_slugs, 1) > 0
                 THEN
-                    author.slug = ANY (search_articles.author_slugs)
+                    author.slug = ANY (search_articles.author_slugs) AND
+                    article_author.date_unassigned IS NULL
                 ELSE
                     TRUE
             END AND
@@ -7082,7 +7116,8 @@ CREATE FUNCTION stats.get_top_author_leaderboard(max_rank integer, since_date ti
             CASE WHEN get_top_author_leaderboard.since_date IS NOT NULL
                 THEN user_article.date_completed >= get_top_author_leaderboard.since_date
                 ELSE user_article.date_completed IS NOT NULL
-            END
+            END AND
+            article_author.date_unassigned IS NULL
         GROUP BY
             author.id
     )
@@ -8835,7 +8870,10 @@ CREATE VIEW community_reads.community_read AS
 
 CREATE TABLE core.article_author (
     article_id bigint NOT NULL,
-    author_id bigint NOT NULL
+    author_id bigint NOT NULL,
+    date_assigned timestamp without time zone DEFAULT core.utc_now() NOT NULL,
+    date_unassigned timestamp without time zone,
+    assignment_method core.author_assignment_method DEFAULT 'metadata'::core.author_assignment_method NOT NULL
 );
 
 

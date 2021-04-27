@@ -29,6 +29,7 @@ AS $$
 					article_author.author_id = author.id
 		WHERE
 			author.slug = get_articles_by_author_slug.slug AND
+			article_author.date_unassigned IS NULL AND
 			core.matches_article_length(
 				word_count := article.word_count,
 				min_length := get_articles_by_author_slug.min_length,
@@ -2115,6 +2116,8 @@ BEGIN
 				LEFT JOIN
 					core.article_author ON
 						period_read.id = article_author.article_id
+			WHERE
+				article_author.date_unassigned IS NULL
 		)
 		SELECT
 			read_author_share.author_id,

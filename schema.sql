@@ -2768,21 +2768,59 @@ CREATE TABLE core.author (
 
 
 --
+-- Name: author_user_account_assignment; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.author_user_account_assignment (
+    id bigint NOT NULL,
+    author_id bigint NOT NULL,
+    user_account_id bigint NOT NULL,
+    date_assigned timestamp without time zone NOT NULL
+);
+
+
+--
+-- Name: author; Type: VIEW; Schema: authors; Owner: -
+--
+
+CREATE VIEW authors.author AS
+ SELECT author.id,
+    author.name,
+    author.url,
+    author.twitter_handle,
+    author.twitter_handle_assignment,
+    author.slug,
+    author.email_address,
+    assignment.user_account_id
+   FROM (core.author
+     LEFT JOIN core.author_user_account_assignment assignment ON ((author.id = assignment.author_id)));
+
+
+--
 -- Name: assign_twitter_handle_to_author(bigint, text, text); Type: FUNCTION; Schema: authors; Owner: -
 --
 
-CREATE FUNCTION authors.assign_twitter_handle_to_author(author_id bigint, twitter_handle text, twitter_handle_assignment text) RETURNS SETOF core.author
-    LANGUAGE sql
+CREATE FUNCTION authors.assign_twitter_handle_to_author(author_id bigint, twitter_handle text, twitter_handle_assignment text) RETURNS SETOF authors.author
+    LANGUAGE plpgsql
     AS $$
+BEGIN
+	-- update the author
     UPDATE
         core.author
     SET
         twitter_handle = assign_twitter_handle_to_author.twitter_handle,
         twitter_handle_assignment = assign_twitter_handle_to_author.twitter_handle_assignment::core.twitter_handle_assignment
     WHERE
-        author.id = assign_twitter_handle_to_author.author_id
-    RETURNING
-        *;
+        author.id = assign_twitter_handle_to_author.author_id;
+	-- return from view
+	RETURN QUERY
+	SELECT
+		*
+	FROM
+		authors.author
+	WHERE
+		author.id = assign_twitter_handle_to_author.author_id;
+END;
 $$;
 
 
@@ -2790,13 +2828,13 @@ $$;
 -- Name: get_author(text); Type: FUNCTION; Schema: authors; Owner: -
 --
 
-CREATE FUNCTION authors.get_author(slug text) RETURNS SETOF core.author
+CREATE FUNCTION authors.get_author(slug text) RETURNS SETOF authors.author
     LANGUAGE sql STABLE
     AS $$
     SELECT
         author.*
     FROM
-        core.author
+        authors.author
     WHERE
         author.slug = get_author.slug;
 $$;
@@ -2806,14 +2844,14 @@ $$;
 -- Name: get_authors_of_article(bigint); Type: FUNCTION; Schema: authors; Owner: -
 --
 
-CREATE FUNCTION authors.get_authors_of_article(article_id bigint) RETURNS SETOF core.author
+CREATE FUNCTION authors.get_authors_of_article(article_id bigint) RETURNS SETOF authors.author
     LANGUAGE sql STABLE
     AS $$
     SELECT
         author.*
     FROM
         core.article_author
-        JOIN core.author ON
+        JOIN authors.author ON
             author.id = article_author.author_id
     WHERE
         article_author.article_id = get_authors_of_article.article_id AND
@@ -9022,18 +9060,6 @@ CREATE SEQUENCE core.author_id_seq
 --
 
 ALTER SEQUENCE core.author_id_seq OWNED BY core.author.id;
-
-
---
--- Name: author_user_account_assignment; Type: TABLE; Schema: core; Owner: -
---
-
-CREATE TABLE core.author_user_account_assignment (
-    id bigint NOT NULL,
-    author_id bigint NOT NULL,
-    user_account_id bigint NOT NULL,
-    date_assigned timestamp without time zone NOT NULL
-);
 
 
 --

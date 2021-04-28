@@ -366,7 +366,7 @@ CREATE FUNCTION
 		user_account_name text
 	)
 RETURNS
-	SETOF core.author
+	SETOF authors.author
 LANGUAGE
 	sql
 STABLE
@@ -374,7 +374,7 @@ AS $$
 	SELECT
 		author.*
 	FROM
-		core.author
+		authors.author
 	WHERE
 		author.id = (
 			SELECT

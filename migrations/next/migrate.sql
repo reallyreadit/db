@@ -417,6 +417,127 @@ AS $$
 		);
 $$;
 
+-- add columns to article_author to track which user performed manual assignments and unassignments
+ALTER TABLE
+	core.article_author
+ADD COLUMN
+	assigned_by_user_account_id bigint,
+ADD CONSTRAINT
+	article_author_assigned_by_user_account_id_fk
+FOREIGN KEY (
+	assigned_by_user_account_id
+)
+REFERENCES
+	core.user_account (id),
+ADD CONSTRAINT
+	article_author_manual_assignment_check
+CHECK (
+	assigned_by_user_account_id IS NOT NULL OR
+	assignment_method != 'manual'::core.author_assignment_method
+),
+ADD COLUMN
+	unassigned_by_user_account_id bigint,
+ADD CONSTRAINT
+	article_author_unassigned_by_user_account_id_fk
+FOREIGN KEY (
+	unassigned_by_user_account_id
+)
+REFERENCES
+	core.user_account (id),
+ADD CONSTRAINT
+	article_author_unassignment_check
+CHECK (
+	unassigned_by_user_account_id IS NOT NULL OR
+	date_unassigned IS NULL
+);
+
+-- add functions to manually assign/unassign authors
+CREATE FUNCTION
+	article_api.assign_author_to_article(
+		article_id bigint,
+		author_id bigint,
+		assigned_by_user_account_id bigint
+	)
+RETURNS
+	SETOF core.article_author
+LANGUAGE
+	sql
+AS $$
+	INSERT INTO
+		core.article_author (
+			article_id,
+			author_id,
+			assignment_method,
+			assigned_by_user_account_id
+		)
+	VALUES (
+		assign_author_to_article.article_id,
+		assign_author_to_article.author_id,
+		'manual'::core.author_assignment_method,
+		assign_author_to_article.assigned_by_user_account_id
+	)
+	ON CONFLICT
+		(article_id, author_id)
+	DO NOTHING
+	RETURNING
+		*;
+$$;
+
+CREATE FUNCTION
+	article_api.unassign_author_from_article(
+		article_id bigint,
+		author_id bigint,
+		unassigned_by_user_account_id bigint
+	)
+RETURNS
+	SETOF core.article_author
+LANGUAGE
+	sql
+AS $$
+	UPDATE
+		core.article_author
+	SET
+		date_unassigned = core.utc_now(),
+		unassigned_by_user_account_id = unassign_author_from_article.unassigned_by_user_account_id
+	WHERE
+		article_author.article_id = unassign_author_from_article.article_id AND
+		article_author.author_id = unassign_author_from_article.author_id AND
+		article_author.date_unassigned IS NULL
+	RETURNING
+		*;
+$$;
+
+-- add function to manually create authors
+CREATE FUNCTION
+	authors.create_author(
+		name text,
+		slug text
+	)
+RETURNS
+	SETOF authors.author
+LANGUAGE
+	plpgsql
+AS $$
+BEGIN
+	INSERT INTO
+		core.author (
+			name,
+			slug
+		)
+	VALUES (
+		create_author.name,
+		create_author.slug
+	);
+	RETURN QUERY
+	SELECT
+		author.*
+	FROM
+		authors.author
+	WHERE
+		author.slug = create_author.slug;
+END;
+$$;
+
 -- create new core subscription types and tables
 CREATE TYPE
    core.subscription_provider AS enum (

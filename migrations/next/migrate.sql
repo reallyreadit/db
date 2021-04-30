@@ -2115,9 +2115,8 @@ BEGIN
 				period_read
 				LEFT JOIN
 					core.article_author ON
-						period_read.id = article_author.article_id
-			WHERE
-				article_author.date_unassigned IS NULL
+						period_read.id = article_author.article_id AND
+						article_author.date_unassigned IS NULL
 		)
 		SELECT
 			read_author_share.author_id,

@@ -1,1 +1,3 @@
 /.idea
+# avoid committing database dumps
+*.tar

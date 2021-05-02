@@ -268,6 +268,13 @@ BEGIN
 			core.user_account
 		WHERE
 			user_account.id = locals.current_user_article.user_account_id
+	) AND (
+		SELECT
+			article.source_id != 48542 -- readup blog
+		FROM
+			core.article
+		WHERE
+			article.id = current_user_article.article_id
 	)
 	THEN
 		RAISE EXCEPTION

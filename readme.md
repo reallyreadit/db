@@ -62,4 +62,4 @@ After a subscription period ends a subscription period distribution needs to be 
 
 This function will only create a distribution for a subscription period with an `end_date` less than or equal to the current timestamp that does not already have a corresponding distribution. In a production scenario this command will be executed as a scheduled task every few minutes.
 
-    psql --dbname=rrit --command="SELECT * FROM subscriptions.create_distributions_for_completed_periods()"
+    psql --dbname=rrit --command="SELECT * FROM subscriptions.create_distributions_for_lapsed_periods(user_account_id := NULL)"

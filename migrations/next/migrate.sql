@@ -259,7 +259,7 @@ BEGIN
 	-- check if the user is allowed to read
 	IF (
 		SELECT
-			user_account.date_created >= '2021-01-01T00:00:00' AND
+			user_account.date_created >= '2021-06-01T04:00:00' AND
 			(
 				user_account.subscription_end_date IS NULL OR
 				user_account.subscription_end_date <= locals.utc_now

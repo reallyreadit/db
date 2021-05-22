@@ -3503,8 +3503,8 @@ CREATE TABLE core.user_account (
     date_deleted timestamp without time zone,
     date_orientation_completed timestamp without time zone,
     subscription_end_date timestamp without time zone,
-    CONSTRAINT user_account_email_valid CHECK (((email)::text ~~ '%@%'::text)),
-    CONSTRAINT user_account_name_valid CHECK (((name)::text ~ similar_escape('[A-Za-z0-9\-_]+'::text, NULL::text)))
+    CONSTRAINT user_account_email_valid CHECK ((((email)::text ~~ '%@%'::text) OR (((email)::text ~ similar_escape('\[deleted\_[0-9]+\]'::text, NULL::text)) AND (date_deleted IS NOT NULL)))),
+    CONSTRAINT user_account_name_valid CHECK ((((name)::text ~ similar_escape('[A-Za-z0-9\-_]+'::text, NULL::text)) OR (((name)::text ~ similar_escape('\[deleted\_[0-9]+\]'::text, NULL::text)) AND (date_deleted IS NOT NULL))))
 );
 
 
@@ -3974,25 +3974,6 @@ CREATE FUNCTION core.generate_local_timestamp_to_utc_range_series(start timestam
 		) AS utc_range
 	FROM
     	generate_series(start, stop, step) AS local_timestamp;
-$$;
-
-
---
--- Name: generate_random_string(integer); Type: FUNCTION; Schema: core; Owner: -
---
-
-CREATE FUNCTION core.generate_random_string(length integer) RETURNS text
-    LANGUAGE sql
-    AS $$
-    SELECT array_to_string(
-        ARRAY(
-            SELECT
-                chr((65 + round(random() * 25))::int)
-            FROM
-                generate_series(1, generate_random_string.length)
-        ),
-        ''
-    );
 $$;
 
 
@@ -6414,7 +6395,8 @@ CREATE TABLE core.silent_post (
     article_id bigint NOT NULL,
     user_account_id bigint NOT NULL,
     date_created timestamp without time zone DEFAULT core.utc_now() NOT NULL,
-    analytics jsonb NOT NULL
+    analytics jsonb NOT NULL,
+    date_deleted timestamp without time zone
 );
 
 
@@ -10280,68 +10262,96 @@ $$;
 
 
 --
--- Name: delete_user_account(text); Type: FUNCTION; Schema: user_account_api; Owner: -
+-- Name: delete_user_account(bigint); Type: FUNCTION; Schema: user_account_api; Owner: -
 --
 
-CREATE FUNCTION user_account_api.delete_user_account(email_address text) RETURNS void
+CREATE FUNCTION user_account_api.delete_user_account(user_account_id bigint) RETURNS SETOF core.user_account
     LANGUAGE plpgsql
     AS $$
-<<locals>>
-DECLARE
-    user_account_id CONSTANT bigint := (
-        SELECT
-            user_account.id
-        FROM
-            core.user_account
-        WHERE
-            user_account.email = delete_user_account.email_address
-    );
 BEGIN
-    IF locals.user_account_id IS NULL THEN
-        RAISE EXCEPTION 'User account not found';
-    END IF;
-    UPDATE
-        core.user_account
-    SET
-        name = core.generate_random_string(30),
-        email = core.generate_random_string(30) || '@' || core.generate_random_string(30),
-        password_hash = E'\\xE40C3AA8085BEAF7E88F0131DEF4E800E0654FCED9ABA5A26B40CD30859229D2',
-        password_salt = E'\\x00000000000000000000000000000000',
-        date_deleted = core.utc_now()
-    WHERE
-        user_account.id = locals.user_account_id;
-    UPDATE
-        core.comment
-    SET
-        date_deleted = core.utc_now()
-    WHERE
-        comment.user_account_id = locals.user_account_id;
-    UPDATE
-        core.notification_preference
-    SET
-        company_update_via_email = FALSE,
-        aotd_via_email = FALSE,
-        aotd_via_extension = FALSE,
-        aotd_via_push = FALSE,
-        aotd_digest_via_email = 'never',
-        reply_via_email = FALSE,
-        reply_via_extension = FALSE,
-        reply_via_push = FALSE,
-        reply_digest_via_email = 'never',
-        loopback_via_email = FALSE,
-        loopback_via_extension = FALSE,
-        loopback_via_push = FALSE,
-        loopback_digest_via_email = 'never',
-        post_via_email = FALSE,
-        post_via_extension = FALSE,
-        post_via_push = FALSE,
-        post_digest_via_email = 'never',
-        follower_via_email = FALSE,
-        follower_via_extension = FALSE,
-        follower_via_push = FALSE,
-        follower_digest_via_email = 'never'
-    WHERE
-        notification_preference.user_account_id = locals.user_account_id;
+	-- Update the user_account record, resetting the name, email and password and setting date_deleted.
+	UPDATE
+		core.user_account
+	SET
+		name = '[deleted_' || user_account.id || ']',
+		email = '[deleted_' || user_account.id || ']',
+		password_hash = E'\\xD78E59C4DC5CED432D999322DC0A773C5085D8D0F33D02EFFDB8AA1CD743E02A',
+		password_salt = E'\\xE4522D33AB44B5C9026312450C9D2A19',
+		creation_analytics = user_account.creation_analytics || jsonb_build_object(
+			'deletion',
+			jsonb_build_object('name', user_account.name, 'email', user_account.email)
+		),
+		date_deleted = core.utc_now()
+	WHERE
+		user_account.id = delete_user_account.user_account_id AND
+		user_account.date_deleted IS NULL;
+
+	-- Delete all comments.
+	UPDATE
+		core.comment
+	SET
+		date_deleted = core.utc_now()
+	WHERE
+		comment.user_account_id = delete_user_account.user_account_id AND
+		comment.date_deleted IS NULL;
+
+	-- Delete all silent posts.
+	UPDATE
+		core.silent_post
+	SET
+		date_deleted = core.utc_now()
+	WHERE
+		silent_post.user_account_id = delete_user_account.user_account_id AND
+		silent_post.date_deleted IS NULL;
+
+	-- Disable all followings.
+	UPDATE
+		core.following
+	SET
+		date_unfollowed = core.utc_now(),
+		unfollow_analytics = jsonb_build_object('action', 'account_deletion')
+	WHERE
+		(
+			following.follower_user_account_id = delete_user_account.user_account_id OR
+			following.followee_user_account_id = delete_user_account.user_account_id
+		) AND
+		date_unfollowed IS NULL;
+
+	-- Disable all notifications.
+	PERFORM
+		notifications.set_preference(
+			user_account_id := delete_user_account.user_account_id,
+			company_update_via_email := FALSE,
+			aotd_via_email := FALSE,
+			aotd_via_extension := FALSE,
+			aotd_via_push := FALSE,
+			aotd_digest_via_email := 'never',
+			reply_via_email := FALSE,
+			reply_via_extension := FALSE,
+			reply_via_push := FALSE,
+			reply_digest_via_email := 'never',
+			loopback_via_email := FALSE,
+			loopback_via_extension := FALSE,
+			loopback_via_push := FALSE,
+			loopback_digest_via_email := 'never',
+			post_via_email := FALSE,
+			post_via_extension := FALSE,
+			post_via_push := FALSE,
+			post_digest_via_email := 'never',
+			follower_via_email := FALSE,
+			follower_via_extension := FALSE,
+			follower_via_push := FALSE,
+			follower_digest_via_email := 'never'
+		);
+
+	-- Return the user_account.
+	RETURN QUERY
+	SELECT
+		*
+	FROM
+		user_account_api.get_user_account_by_id(
+			user_account_id := delete_user_account.user_account_id
+		);
 END;
 $$;
 
@@ -12380,7 +12390,7 @@ UNION ALL
     NULL::text AS comment_text,
     NULL::social.comment_addendum[] AS comment_addenda,
     silent_post.id AS silent_post_id,
-    NULL::timestamp without time zone AS date_deleted
+    silent_post.date_deleted
    FROM core.silent_post;
 
 

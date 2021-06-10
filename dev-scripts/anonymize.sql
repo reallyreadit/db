@@ -169,7 +169,6 @@ SET
 	loopback_alert_count = 0,
 	post_alert_count = 0,
 	has_linked_twitter_account = FALSE,
-	date_deleted = NULL,
 	date_orientation_completed = NULL
 WHERE
 	TRUE;

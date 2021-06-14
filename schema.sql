@@ -9006,6 +9006,42 @@ $$;
 
 
 --
+-- Name: payout_account; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.payout_account (
+    id text NOT NULL,
+    user_account_id bigint NOT NULL,
+    date_created timestamp without time zone NOT NULL,
+    date_details_submitted timestamp without time zone,
+    date_payouts_enabled timestamp without time zone
+);
+
+
+--
+-- Name: create_payout_account(text, bigint); Type: FUNCTION; Schema: subscriptions; Owner: -
+--
+
+CREATE FUNCTION subscriptions.create_payout_account(id text, user_account_id bigint) RETURNS SETOF core.payout_account
+    LANGUAGE sql
+    AS $$
+	INSERT INTO
+		core.payout_account (
+			id,
+			user_account_id,
+			date_created
+		)
+	VALUES (
+		create_payout_account.id,
+		create_payout_account.user_account_id,
+		core.utc_now()
+	)
+	RETURNING
+		*;
+$$;
+
+
+--
 -- Name: subscription_renewal_status_change; Type: TABLE; Schema: core; Owner: -
 --
 
@@ -9177,6 +9213,38 @@ CREATE FUNCTION subscriptions.get_payment_method(provider text, provider_payment
 	WHERE
 		current_method.provider = get_payment_method.provider::core.subscription_provider AND
 		current_method.provider_payment_method_id = get_payment_method.provider_payment_method_id;
+$$;
+
+
+--
+-- Name: get_payout_account(text); Type: FUNCTION; Schema: subscriptions; Owner: -
+--
+
+CREATE FUNCTION subscriptions.get_payout_account(id text) RETURNS SETOF core.payout_account
+    LANGUAGE sql
+    AS $$
+	SELECT
+		payout_account.*
+	FROM
+		core.payout_account
+	WHERE
+		payout_account.id = get_payout_account.id;
+$$;
+
+
+--
+-- Name: get_payout_account_for_user_account(bigint); Type: FUNCTION; Schema: subscriptions; Owner: -
+--
+
+CREATE FUNCTION subscriptions.get_payout_account_for_user_account(user_account_id bigint) RETURNS SETOF core.payout_account
+    LANGUAGE sql
+    AS $$
+	SELECT
+		payout_account.*
+	FROM
+		core.payout_account
+	WHERE
+		payout_account.user_account_id = get_payout_account_for_user_account.user_account_id;
 $$;
 
 
@@ -9590,6 +9658,25 @@ BEGIN
 		current_method.provider = update_payment_method.provider::core.subscription_provider AND
 		current_method.provider_payment_method_id = update_payment_method.provider_payment_method_id;
 END;
+$$;
+
+
+--
+-- Name: update_payout_account(text, timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: subscriptions; Owner: -
+--
+
+CREATE FUNCTION subscriptions.update_payout_account(id text, date_details_submitted timestamp without time zone, date_payouts_enabled timestamp without time zone) RETURNS SETOF core.payout_account
+    LANGUAGE sql
+    AS $$
+	UPDATE
+		core.payout_account
+	SET
+		date_details_submitted = coalesce(payout_account.date_details_submitted, update_payout_account.date_details_submitted),
+		date_payouts_enabled = coalesce(payout_account.date_payouts_enabled, update_payout_account.date_payouts_enabled)
+	WHERE
+		payout_account.id = update_payout_account.id
+	RETURNING
+		*;
 $$;
 
 
@@ -13225,6 +13312,22 @@ ALTER TABLE ONLY core.password_reset_request
 
 
 --
+-- Name: payout_account payout_account_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.payout_account
+    ADD CONSTRAINT payout_account_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: payout_account payout_account_user_account_id_key; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.payout_account
+    ADD CONSTRAINT payout_account_user_account_id_key UNIQUE (user_account_id);
+
+
+--
 -- Name: provisional_user_account provisional_user_account_pkey; Type: CONSTRAINT; Schema: core; Owner: -
 --
 
@@ -14245,6 +14348,14 @@ ALTER TABLE ONLY core.password_reset_request
 
 ALTER TABLE ONLY core.password_reset_request
     ADD CONSTRAINT password_reset_request_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
+
+
+--
+-- Name: payout_account payout_account_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.payout_account
+    ADD CONSTRAINT payout_account_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
 
 
 --

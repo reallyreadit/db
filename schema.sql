@@ -887,6 +887,48 @@ CREATE TYPE subscriptions.subscription_status_latest_renewal_status_change AS (
 );
 
 
+SET default_with_oids = false;
+
+--
+-- Name: website_traffic_weekly_total; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.website_traffic_weekly_total (
+    week timestamp without time zone NOT NULL,
+    unique_visit_count integer NOT NULL,
+    last_updated timestamp without time zone NOT NULL
+);
+
+
+--
+-- Name: create_or_update_website_traffic_weekly_total(timestamp without time zone, integer); Type: FUNCTION; Schema: analytics; Owner: -
+--
+
+CREATE FUNCTION analytics.create_or_update_website_traffic_weekly_total(week timestamp without time zone, unique_visit_count integer) RETURNS SETOF core.website_traffic_weekly_total
+    LANGUAGE sql
+    AS $$
+	INSERT INTO
+		core.website_traffic_weekly_total (
+			week,
+			unique_visit_count,
+			last_updated
+		)
+	VALUES (
+		create_or_update_website_traffic_weekly_total.week,
+		create_or_update_website_traffic_weekly_total.unique_visit_count,
+		core.utc_now()
+	)
+	ON CONFLICT (
+		week
+	)
+	DO UPDATE SET
+		unique_visit_count = create_or_update_website_traffic_weekly_total.unique_visit_count,
+		last_updated = core.utc_now()
+	RETURNING
+		*;
+$$;
+
+
 --
 -- Name: get_article_issue_reports(timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: analytics; Owner: -
 --
@@ -1647,8 +1689,6 @@ CREATE FUNCTION core.utc_now() RETURNS timestamp without time zone
 	SELECT local_now('UTC');
 $$;
 
-
-SET default_with_oids = false;
 
 --
 -- Name: twitter_bot_tweet; Type: TABLE; Schema: core; Owner: -
@@ -12378,16 +12418,6 @@ CREATE SEQUENCE core.user_page_id_seq
 --
 
 ALTER SEQUENCE core.user_page_id_seq OWNED BY core.user_article.id;
-
-
---
--- Name: website_traffic_weekly_total; Type: TABLE; Schema: core; Owner: -
---
-
-CREATE TABLE core.website_traffic_weekly_total (
-    week timestamp without time zone NOT NULL,
-    unique_visit_count integer NOT NULL
-);
 
 
 --

@@ -292,9 +292,13 @@ USING
 	LEFT JOIN
 		core.article_author ON
 			author.id = article_author.author_id
+	LEFT JOIN
+		core.author_user_account_assignment AS assignment ON
+			author.id = assignment.author_id
 WHERE
 	orphaned_author.id = author.id AND
-	article_author.article_id IS NULL;
+	article_author.article_id IS NULL AND
+	assignment.id IS NULL;
 
 DROP INDEX
 	article_author_author_id_idx;

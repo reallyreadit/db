@@ -794,9 +794,21 @@ CREATE TYPE subscriptions.author_earnings_report_line_item AS (
 	author_slug text,
 	user_account_id bigint,
 	user_account_name text,
+	donation_recipient_id bigint,
+	donation_recipient_name text,
 	minutes_read integer,
 	amount_earned integer,
 	amount_paid integer
+);
+
+
+--
+-- Name: payout_totals_report; Type: TYPE; Schema: subscriptions; Owner: -
+--
+
+CREATE TYPE subscriptions.payout_totals_report AS (
+	totalauthorpayouts integer,
+	totaldonationpayouts integer
 );
 
 
@@ -9356,6 +9368,38 @@ $$;
 
 
 --
+-- Name: donation_recipient; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.donation_recipient (
+    id bigint NOT NULL,
+    date_created timestamp without time zone NOT NULL,
+    name text NOT NULL,
+    website text NOT NULL,
+    tax_id text NOT NULL
+);
+
+
+--
+-- Name: get_donation_recipient_for_author(bigint); Type: FUNCTION; Schema: subscriptions; Owner: -
+--
+
+CREATE FUNCTION subscriptions.get_donation_recipient_for_author(author_id bigint) RETURNS SETOF core.donation_recipient
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT
+		recipient.*
+	FROM
+		core.donation_account AS account
+		JOIN
+			core.donation_recipient AS recipient ON
+				account.donation_recipient_id = recipient.id
+	WHERE
+		account.author_id = get_donation_recipient_for_author.author_id;
+$$;
+
+
+--
 -- Name: get_payment_method(text, text); Type: FUNCTION; Schema: subscriptions; Owner: -
 --
 
@@ -9559,6 +9603,8 @@ CREATE FUNCTION subscriptions.run_authors_earnings_report() RETURNS SETOF subscr
 		author.slug,
 		user_account.id,
 		user_account.name,
+		donation_recipient.id,
+		donation_recipient.name,
 		sum(author_distribution.minutes_read)::int,
 		sum(author_distribution.amount)::int,
 		0
@@ -9587,9 +9633,17 @@ CREATE FUNCTION subscriptions.run_authors_earnings_report() RETURNS SETOF subscr
 		LEFT JOIN
 			core.user_account ON
 				user_account_assignment.user_account_id = user_account.id
+		LEFT JOIN
+			core.donation_account ON
+				author.id = donation_account.author_id OR
+				user_account.id = donation_account.user_account_id
+		LEFT JOIN
+			core.donation_recipient ON
+				donation_account.donation_recipient_id = donation_recipient.id
 	GROUP BY
 		author.id,
-		user_account.id;
+		user_account.id,
+		donation_recipient.id;
 $$;
 
 
@@ -9767,6 +9821,21 @@ CREATE FUNCTION subscriptions.run_distribution_report_for_period_distributions(u
 		)
 	FROM
 		user_distribution;
+$$;
+
+
+--
+-- Name: run_payout_totals_report(); Type: FUNCTION; Schema: subscriptions; Owner: -
+--
+
+CREATE FUNCTION subscriptions.run_payout_totals_report() RETURNS SETOF subscriptions.payout_totals_report
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT
+		0,
+		sum(donation_payout.amount)::int
+	FROM
+		core.donation_payout;
 $$;
 
 
@@ -11794,6 +11863,92 @@ ALTER SEQUENCE core.display_preference_id_seq OWNED BY core.display_preference.i
 
 
 --
+-- Name: donation_account; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.donation_account (
+    id bigint NOT NULL,
+    author_id bigint,
+    user_account_id bigint,
+    date_created timestamp without time zone NOT NULL,
+    date_user_account_assigned timestamp without time zone,
+    donation_recipient_id bigint NOT NULL,
+    CONSTRAINT donation_account_principal_check CHECK ((((author_id IS NOT NULL) AND (user_account_id IS NULL) AND (date_user_account_assigned IS NULL)) OR ((author_id IS NULL) AND (user_account_id IS NOT NULL) AND (date_user_account_assigned IS NOT NULL))))
+);
+
+
+--
+-- Name: donation_account_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.donation_account_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: donation_account_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.donation_account_id_seq OWNED BY core.donation_account.id;
+
+
+--
+-- Name: donation_payout; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.donation_payout (
+    id bigint NOT NULL,
+    date_created timestamp without time zone NOT NULL,
+    donation_account_id bigint NOT NULL,
+    donation_recipient_id bigint NOT NULL,
+    amount integer NOT NULL,
+    receipt text NOT NULL
+);
+
+
+--
+-- Name: donation_payout_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.donation_payout_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: donation_payout_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.donation_payout_id_seq OWNED BY core.donation_payout.id;
+
+
+--
+-- Name: donation_recipient_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.donation_recipient_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: donation_recipient_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.donation_recipient_id_seq OWNED BY core.donation_recipient.id;
+
+
+--
 -- Name: email_confirmation_id_seq; Type: SEQUENCE; Schema: core; Owner: -
 --
 
@@ -12846,6 +13001,27 @@ ALTER TABLE ONLY core.display_preference ALTER COLUMN id SET DEFAULT nextval('co
 
 
 --
+-- Name: donation_account id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.donation_account ALTER COLUMN id SET DEFAULT nextval('core.donation_account_id_seq'::regclass);
+
+
+--
+-- Name: donation_payout id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.donation_payout ALTER COLUMN id SET DEFAULT nextval('core.donation_payout_id_seq'::regclass);
+
+
+--
+-- Name: donation_recipient id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.donation_recipient ALTER COLUMN id SET DEFAULT nextval('core.donation_recipient_id_seq'::regclass);
+
+
+--
 -- Name: email_confirmation id; Type: DEFAULT; Schema: core; Owner: -
 --
 
@@ -13287,6 +13463,30 @@ ALTER TABLE ONLY core.comment
 
 ALTER TABLE ONLY core.comment_revision
     ADD CONSTRAINT comment_revision_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: donation_account donation_account_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.donation_account
+    ADD CONSTRAINT donation_account_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: donation_payout donation_payout_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.donation_payout
+    ADD CONSTRAINT donation_payout_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: donation_recipient donation_recipient_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.donation_recipient
+    ADD CONSTRAINT donation_recipient_pkey PRIMARY KEY (id);
 
 
 --
@@ -14254,6 +14454,46 @@ ALTER TABLE ONLY core.comment
 
 ALTER TABLE ONLY core.display_preference
     ADD CONSTRAINT display_preference_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
+
+
+--
+-- Name: donation_account donation_account_author_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.donation_account
+    ADD CONSTRAINT donation_account_author_id_fkey FOREIGN KEY (author_id) REFERENCES core.author(id);
+
+
+--
+-- Name: donation_account donation_account_donation_recipient_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.donation_account
+    ADD CONSTRAINT donation_account_donation_recipient_id_fkey FOREIGN KEY (donation_recipient_id) REFERENCES core.donation_recipient(id);
+
+
+--
+-- Name: donation_account donation_account_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.donation_account
+    ADD CONSTRAINT donation_account_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
+
+
+--
+-- Name: donation_payout donation_payout_donation_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.donation_payout
+    ADD CONSTRAINT donation_payout_donation_account_id_fkey FOREIGN KEY (donation_account_id) REFERENCES core.donation_account(id);
+
+
+--
+-- Name: donation_payout donation_payout_donation_recipient_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.donation_payout
+    ADD CONSTRAINT donation_payout_donation_recipient_id_fkey FOREIGN KEY (donation_recipient_id) REFERENCES core.donation_recipient(id);
 
 
 --

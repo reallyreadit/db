@@ -1015,8 +1015,14 @@ CREATE FUNCTION analytics.get_articles_requiring_author_assignments() RETURNS SE
 				core.article_author ON
 					user_article.article_id = article_author.article_id AND
 					article_author.date_unassigned IS NULL
+			LEFT JOIN
+				core.author ON
+					article_author.author_id = author.id
 		WHERE
-			article_author.article_id IS NULL
+			article_author.article_id IS NULL OR
+			author.slug IN ('condé-nast', 'nature-editorial') OR
+			author.name ILIKE '%,%' OR
+			author.name ILIKE '% and %'
 	)
 	SELECT
 		article_api_article.*

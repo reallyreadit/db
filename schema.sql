@@ -1021,7 +1021,10 @@ CREATE FUNCTION analytics.get_articles_requiring_author_assignments() RETURNS SE
 		WHERE
 			article_author.article_id IS NULL OR
 			author.slug IN ('condé-nast', 'nature-editorial') OR
-			author.name ILIKE '%,%' OR
+			(
+				author.name ILIKE '%,%' AND
+				author.name NOT ILIKE '%, Inc.'
+			) OR
 			author.name ILIKE '% and %'
 	)
 	SELECT

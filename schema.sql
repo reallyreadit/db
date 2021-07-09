@@ -134,6 +134,19 @@ CREATE TYPE analytics.revenue_report_line_item AS (
 
 
 --
+-- Name: weekly_user_activity_report; Type: TYPE; Schema: analytics; Owner: -
+--
+
+CREATE TYPE analytics.weekly_user_activity_report AS (
+	week timestamp without time zone,
+	active_user_count integer,
+	active_reader_count integer,
+	minutes_reading integer,
+	minutes_reading_to_completion integer
+);
+
+
+--
 -- Name: article_author; Type: TYPE; Schema: article_api; Owner: -
 --
 
@@ -918,26 +931,29 @@ SET default_with_oids = false;
 CREATE TABLE core.website_traffic_weekly_total (
     week timestamp without time zone NOT NULL,
     unique_visit_count integer NOT NULL,
-    last_updated timestamp without time zone NOT NULL
+    last_updated timestamp without time zone NOT NULL,
+    unique_authenticated_visit_count integer DEFAULT 0 NOT NULL
 );
 
 
 --
--- Name: create_or_update_website_traffic_weekly_total(timestamp without time zone, integer); Type: FUNCTION; Schema: analytics; Owner: -
+-- Name: create_or_update_website_traffic_weekly_total(timestamp without time zone, integer, integer); Type: FUNCTION; Schema: analytics; Owner: -
 --
 
-CREATE FUNCTION analytics.create_or_update_website_traffic_weekly_total(week timestamp without time zone, unique_visit_count integer) RETURNS SETOF core.website_traffic_weekly_total
+CREATE FUNCTION analytics.create_or_update_website_traffic_weekly_total(week timestamp without time zone, unique_visit_count integer, unique_authenticated_visit_count integer) RETURNS SETOF core.website_traffic_weekly_total
     LANGUAGE sql
     AS $$
 	INSERT INTO
 		core.website_traffic_weekly_total (
 			week,
 			unique_visit_count,
+			unique_authenticated_visit_count,
 			last_updated
 		)
 	VALUES (
 		create_or_update_website_traffic_weekly_total.week,
 		create_or_update_website_traffic_weekly_total.unique_visit_count,
+		create_or_update_website_traffic_weekly_total.unique_authenticated_visit_count,
 		core.utc_now()
 	)
 	ON CONFLICT (
@@ -945,6 +961,7 @@ CREATE FUNCTION analytics.create_or_update_website_traffic_weekly_total(week tim
 	)
 	DO UPDATE SET
 		unique_visit_count = create_or_update_website_traffic_weekly_total.unique_visit_count,
+		unique_authenticated_visit_count = create_or_update_website_traffic_weekly_total.unique_authenticated_visit_count,
 		last_updated = core.utc_now()
 	RETURNING
 		*;
@@ -1227,6 +1244,9 @@ CREATE FUNCTION analytics.get_daily_totals(start_date timestamp without time zon
 			FROM
 				user_article
 				JOIN report_period ON user_article.date_completed <@ report_period.range
+				JOIN user_account ON user_article.user_account_id = user_account.id
+			WHERE
+				user_account.role != 'admin'::core.user_account_role
 			GROUP BY report_period.day
 		) AS read_totals ON read_totals.day = report_period.day
 		LEFT JOIN (
@@ -1278,6 +1298,10 @@ CREATE FUNCTION analytics.get_daily_totals(start_date timestamp without time zon
 				report_period
 				JOIN core.comment ON
 					comment.date_created <@ report_period.range
+				JOIN core.user_account ON
+					user_account.id = comment.user_account_id
+			WHERE
+				user_account.role != 'admin'::core.user_account_role
 			GROUP BY
 				report_period.day
 		) AS comment_totals ON
@@ -1300,6 +1324,10 @@ CREATE FUNCTION analytics.get_daily_totals(start_date timestamp without time zon
 				report_period
 				JOIN core.silent_post ON
 					silent_post.date_created <@ report_period.range
+				JOIN core.user_account ON
+					user_account.id = silent_post.user_account_id
+			WHERE
+				user_account.role != 'admin'::core.user_account_role
 			GROUP BY
 				report_period.day
 		) AS silent_post_totals ON
@@ -1329,6 +1357,11 @@ CREATE FUNCTION analytics.get_daily_totals(start_date timestamp without time zon
 					comment.id = auth_service_post.comment_id
 				LEFT JOIN core.silent_post ON
 					silent_post.id = auth_service_post.silent_post_id
+				JOIN core.user_account ON
+					user_account.id = comment.user_account_id OR
+					user_account.id = silent_post.user_account_id
+			WHERE
+				user_account.role != 'admin'::core.user_account_role
 			GROUP BY
 				report_period.day
 		) AS post_tweet_total ON
@@ -1339,9 +1372,12 @@ CREATE FUNCTION analytics.get_daily_totals(start_date timestamp without time zon
 				count(*) AS count
 			FROM
 				extension_installation
-			JOIN report_period ON extension_installation.timestamp <@ report_period.range
-		GROUP BY
-			report_period.day
+				JOIN report_period ON extension_installation.timestamp <@ report_period.range
+				LEFT JOIN user_account ON extension_installation.user_account_id = user_account.id
+			WHERE
+				coalesce(user_account.role, 'regular'::core.user_account_role) != 'admin'::core.user_account_role
+			GROUP BY
+				report_period.day
 		) AS extension_installation_total ON extension_installation_total.day = report_period.day
 		LEFT JOIN (
 			SELECT
@@ -1349,7 +1385,10 @@ CREATE FUNCTION analytics.get_daily_totals(start_date timestamp without time zon
 				count(*) AS count
 			FROM
 				extension_removal
-			JOIN report_period ON extension_removal.timestamp <@ report_period.range
+				JOIN report_period ON extension_removal.timestamp <@ report_period.range
+				LEFT JOIN user_account ON extension_removal.user_account_id = user_account.id
+			WHERE
+				coalesce(user_account.role, 'regular'::core.user_account_role) != 'admin'::core.user_account_role
 		GROUP BY
 			report_period.day
 		) AS extension_removal_total ON extension_removal_total.day = report_period.day
@@ -1368,7 +1407,8 @@ CREATE FUNCTION analytics.get_daily_totals(start_date timestamp without time zon
 					FILTER (
 						WHERE
 							report_period.range @> subscription_period.renewal_grace_period_end_date AND
-							coalesce(next_period.payment_status, 'failed'::core.subscription_payment_status) != 'succeeded'::core.subscription_payment_status
+							coalesce(next_period.payment_status, 'failed'::core.subscription_payment_status) != 'succeeded'::core.subscription_payment_status AND
+							subscription_period.renewal_grace_period_end_date <= core.utc_now()
 					) AS lapsed_count
 			FROM
 				report_period
@@ -1387,13 +1427,16 @@ CREATE FUNCTION analytics.get_daily_totals(start_date timestamp without time zon
 					core.subscription_account ON
 						subscription.provider = subscription_account.provider AND
 						subscription.provider_account_id = subscription_account.provider_account_id
+				JOIN
+					core.user_account ON
+						subscription_account.user_account_id = user_account.id
 				LEFT JOIN
 					core.subscription_period AS next_period ON
 						subscription_period.provider = next_period.provider AND
 						subscription_period.next_provider_period_id = next_period.provider_period_id
 				WHERE
 					subscription_account.environment = 'production'::core.subscription_environment AND
-					subscription_account.user_account_id NOT IN (1, 2) AND
+					user_account.role != 'admin'::core.user_account_role AND
 					subscription_period.payment_status = 'succeeded'::core.subscription_payment_status
 			GROUP BY
 				report_period.day
@@ -1461,9 +1504,12 @@ CREATE FUNCTION analytics.get_monthly_recurring_revenue_report(start_date timest
 					core.subscription_account ON
 						subscription.provider = subscription_account.provider AND
 						subscription.provider_account_id = subscription_account.provider_account_id
+				JOIN
+					core.user_account ON
+						subscription_account.user_account_id = user_account.id
 				WHERE
 					subscription_account.environment = 'production'::core.subscription_environment AND
-					subscription_account.user_account_id NOT IN (1, 2) AND
+					user_account.role != 'admin'::core.user_account_role AND
 					subscription_period.payment_status = 'succeeded'::core.subscription_payment_status
 			ORDER BY
 				period,
@@ -1519,8 +1565,11 @@ CREATE FUNCTION analytics.get_revenue_report(start_date timestamp without time z
 				core.subscription_account AS account ON
 					subscription.provider = account.provider AND
 					subscription.provider_account_id = account.provider_account_id AND
-					account.environment = 'production'::core.subscription_environment AND
-					account.user_account_id NOT IN (1, 2)
+					account.environment = 'production'::core.subscription_environment
+			JOIN
+				core.user_account ON
+					account.user_account_id = user_account.id AND
+					user_account.role != 'admin'::core.user_account_role
 		WHERE
 			period.payment_status = 'succeeded'::core.subscription_payment_status
 	)
@@ -1629,6 +1678,81 @@ CREATE FUNCTION analytics.get_signups(start_date timestamp without time zone, en
 			subscription_purchase.user_account_id = new_user.id
 	ORDER BY
 		new_user.date_created DESC;
+$$;
+
+
+--
+-- Name: get_weekly_user_activity(timestamp without time zone, timestamp without time zone); Type: FUNCTION; Schema: analytics; Owner: -
+--
+
+CREATE FUNCTION analytics.get_weekly_user_activity(start_date timestamp without time zone, end_date timestamp without time zone) RETURNS SETOF analytics.weekly_user_activity_report
+    LANGUAGE sql STABLE
+    AS $$
+	WITH report_period AS (
+		SELECT
+			first_day AS week,
+			tsrange(first_day, first_day + '1 week'::interval) AS range
+		FROM
+			generate_series(
+				get_weekly_user_activity.start_date,
+				get_weekly_user_activity.end_date,
+				'1 week'::interval
+			) AS week (first_day)
+	)
+	SELECT
+		report_period.week,
+		coalesce(active_user_total.count::int, 0),
+		coalesce(reading_time_total.user_count::int, 0),
+		coalesce(reading_time_total.minutes_reading, 0),
+		coalesce(reading_time_total.minutes_reading_to_completion, 0)
+	FROM
+		report_period
+		LEFT JOIN (
+			SELECT
+				report_period.week,
+				sum(traffic_total.unique_authenticated_visit_count) AS count
+			FROM
+				report_period
+				JOIN
+					core.website_traffic_weekly_total AS traffic_total ON
+						report_period.range @> traffic_total.week
+			GROUP BY
+				report_period.week
+		) AS active_user_total ON
+			report_period.week = active_user_total.week
+		LEFT JOIN (
+			SELECT
+				report_period.week,
+				count(DISTINCT user_account.id) AS user_count,
+				core.estimate_reading_time(
+					sum(progress.words_read)
+				) AS minutes_reading,
+				core.estimate_reading_time(
+					sum(progress.words_read)
+						FILTER (
+							WHERE user_article.date_completed IS NOT NULL
+						)
+				) AS minutes_reading_to_completion
+			FROM
+				report_period
+				JOIN
+					core.user_article_progress AS progress ON
+						report_period.range @> progress.period
+				JOIN
+					core.user_article ON
+						progress.user_account_id = user_article.user_account_id AND
+						progress.article_id = user_article.article_id
+				JOIN
+					core.user_account ON
+						user_article.user_account_id = user_account.id
+			WHERE
+				user_account.role != 'admin'::core.user_account_role
+			GROUP BY
+				report_period.week
+		) AS reading_time_total ON
+			report_period.week = reading_time_total.week
+	ORDER BY
+		report_period.week DESC;
 $$;
 
 

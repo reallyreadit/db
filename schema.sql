@@ -2666,7 +2666,8 @@ CREATE FUNCTION article_api.get_articles_by_author_slug(slug text, user_account_
 	WITH author_article AS (
 		SELECT DISTINCT
 			article.id,
-			article.date_published
+			article.date_published,
+			article.top_score
 		FROM
 			core.article
 			JOIN
@@ -2701,6 +2702,7 @@ CREATE FUNCTION article_api.get_articles_by_author_slug(slug text, user_account_
 				FROM
 					author_article
 				ORDER BY
+					author_article.top_score DESC,
 					author_article.date_published DESC NULLS LAST,
 					author_article.id DESC
 				OFFSET
@@ -8690,6 +8692,47 @@ $$;
 
 
 --
+-- Name: author_payout; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.author_payout (
+    id text NOT NULL,
+    date_created timestamp without time zone NOT NULL,
+    payout_account_id text NOT NULL,
+    amount integer NOT NULL
+);
+
+
+--
+-- Name: create_author_payout(text, timestamp without time zone, text, integer); Type: FUNCTION; Schema: subscriptions; Owner: -
+--
+
+CREATE FUNCTION subscriptions.create_author_payout(id text, date_created timestamp without time zone, payout_account_id text, amount integer) RETURNS SETOF core.author_payout
+    LANGUAGE sql
+    AS $$
+	INSERT INTO
+		core.author_payout (
+			id,
+			date_created,
+			payout_account_id,
+			amount
+		)
+	VALUES (
+		create_author_payout.id,
+		create_author_payout.date_created,
+		create_author_payout.payout_account_id,
+		create_author_payout.amount
+	)
+	ON CONFLICT (
+		id
+	)
+	DO NOTHING
+	RETURNING
+		*;
+$$;
+
+
+--
 -- Name: subscription_level; Type: TABLE; Schema: core; Owner: -
 --
 
@@ -9965,10 +10008,51 @@ CREATE FUNCTION subscriptions.run_payout_totals_report() RETURNS SETOF subscript
     LANGUAGE sql STABLE
     AS $$
 	SELECT
-		0,
-		sum(donation_payout.amount)::int
-	FROM
-		core.donation_payout;
+		(
+			SELECT
+				sum(author_payout.amount)::int
+			FROM
+				core.author_payout
+		),
+		(
+			SELECT
+				sum(donation_payout.amount)::int
+			FROM
+				core.donation_payout
+		);
+$$;
+
+
+--
+-- Name: run_payout_totals_report_for_user_account(bigint); Type: FUNCTION; Schema: subscriptions; Owner: -
+--
+
+CREATE FUNCTION subscriptions.run_payout_totals_report_for_user_account(user_account_id bigint) RETURNS SETOF subscriptions.payout_totals_report
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT
+		(
+			SELECT
+				sum(payout.amount)::int
+			FROM
+				core.author_payout AS payout
+				JOIN
+					core.payout_account AS account ON
+						payout.payout_account_id = account.id
+			WHERE
+				account.user_account_id = run_payout_totals_report_for_user_account.user_account_id
+		),
+		(
+			SELECT
+				sum(payout.amount)::int
+			FROM
+				core.donation_payout AS payout
+				JOIN
+					core.donation_account AS account ON
+						payout.donation_account_id = account.id
+			WHERE
+				account.user_account_id = run_payout_totals_report_for_user_account.user_account_id
+		);
 $$;
 
 
@@ -13495,6 +13579,14 @@ ALTER TABLE ONLY core.auth_service_user
 
 
 --
+-- Name: author_payout author_payout_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.author_payout
+    ADD CONSTRAINT author_payout_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: author author_pkey; Type: CONSTRAINT; Schema: core; Owner: -
 --
 
@@ -14483,6 +14575,14 @@ ALTER TABLE ONLY core.auth_service_refresh_token
 
 ALTER TABLE ONLY core.auth_service_user
     ADD CONSTRAINT auth_service_user_identity_id_fkey FOREIGN KEY (identity_id) REFERENCES core.auth_service_identity(id);
+
+
+--
+-- Name: author_payout author_payout_payout_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.author_payout
+    ADD CONSTRAINT author_payout_payout_account_id_fkey FOREIGN KEY (payout_account_id) REFERENCES core.payout_account(id);
 
 
 --

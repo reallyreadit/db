@@ -1068,8 +1068,8 @@ CREATE FUNCTION analytics.get_articles_requiring_author_assignments() RETURNS SE
 		article_api_article.*
 	FROM
 		article_api.get_articles(
-			user_account_id := NULL,
-			VARIADIC article_ids := ARRAY(
+			NULL::bigint,
+			VARIADIC ARRAY(
 				SELECT DISTINCT
 					authorless_subscriber_article.id
 				FROM

@@ -3900,7 +3900,7 @@ $$;
 -- Name: run_wrm_sync_report(integer, integer); Type: FUNCTION; Schema: authors; Owner: -
 --
 
-CREATE FUNCTION authors.run_wrm_sync_report(min_amount_earned integer, max_amount_earned integer) RETURNS TABLE(author_name text, author_slug text, author_contact_status core.author_contact_status, user_account_name text, user_account_email text, amount_earned integer, amount_paid integer, amount_donated integer)
+CREATE FUNCTION authors.run_wrm_sync_report(min_amount_earned integer, max_amount_earned integer) RETURNS TABLE(author_name text, author_slug text, author_contact_status core.author_contact_status, top_source text, user_account_name text, user_account_email text, amount_earned integer, amount_paid integer, amount_donated integer)
     LANGUAGE sql STABLE
     AS $$
 	WITH earnings_report AS (
@@ -3937,6 +3937,38 @@ CREATE FUNCTION authors.run_wrm_sync_report(min_amount_earned integer, max_amoun
 				core.user_account ON
 					user_account_assignment.user_account_id = user_account.id
 	),
+	top_source AS (
+		SELECT
+			DISTINCT ON (
+				author_source_stats.author_id
+			)
+			author_source_stats.author_id,
+			author_source_stats.source_name
+		FROM
+			(
+				SELECT
+					author_with_earnings.author_id,
+					source.name AS source_name,
+					count(*) AS article_count
+				FROM
+					author_with_earnings
+					JOIN
+						core.article_author ON
+							author_with_earnings.author_id = article_author.author_id
+					JOIN
+						core.article ON
+							article_author.article_id = article.id
+					JOIN
+						core.source ON
+							article.source_id = source.id
+				GROUP BY
+					author_with_earnings.author_id,
+					source.id
+			) AS author_source_stats
+		ORDER BY
+			author_source_stats.author_id,
+			author_source_stats.article_count DESC
+	),
 	author_payouts AS (
 		SELECT
 			author_with_earnings.author_id,
@@ -3972,6 +4004,7 @@ CREATE FUNCTION authors.run_wrm_sync_report(min_amount_earned integer, max_amoun
 		author_with_earnings.author_name,
 		author_with_earnings.author_slug,
 		author_with_earnings.author_contact_status,
+		trim(top_source.source_name),
 		author_with_earnings.user_account_name,
 		author_with_earnings.user_account_email,
 		author_with_earnings.amount_earned,
@@ -3979,6 +4012,9 @@ CREATE FUNCTION authors.run_wrm_sync_report(min_amount_earned integer, max_amoun
 		coalesce(donation_payouts.payout_total::int, 0)
 	FROM
 		author_with_earnings
+		JOIN
+			top_source ON
+				author_with_earnings.author_id = top_source.author_id
 		LEFT JOIN
 			author_payouts ON
 				author_with_earnings.author_id = author_payouts.author_id

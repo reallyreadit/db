@@ -2070,7 +2070,8 @@ CREATE TABLE core.source (
     hostname character varying(256) NOT NULL,
     slug character varying(256) NOT NULL,
     twitter_handle text,
-    twitter_handle_assignment core.twitter_handle_assignment DEFAULT 'none'::core.twitter_handle_assignment NOT NULL
+    twitter_handle_assignment core.twitter_handle_assignment DEFAULT 'none'::core.twitter_handle_assignment NOT NULL,
+    hostname_priority integer DEFAULT 0 NOT NULL
 );
 
 
@@ -2384,7 +2385,16 @@ $$;
 CREATE FUNCTION article_api.find_source(source_hostname text) RETURNS SETOF core.source
     LANGUAGE sql
     AS $$
-	SELECT * FROM source WHERE hostname = source_hostname;
+	SELECT
+		source.*
+	FROM
+		core.source
+	WHERE
+		regexp_replace(source.hostname, '^www\.', '') = find_source.source_hostname
+	ORDER BY
+		source.hostname_priority
+	LIMIT
+		1;
 $$;
 
 

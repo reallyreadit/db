@@ -147,7 +147,6 @@ WHERE
 UPDATE
 	core.user_account
 SET
-	email = user_account.name || '@readup.com',
 	-- sets password = 'password'
 	password_hash = E'\\x4B0C6BA854E085CA2C6E014EE461000187C6D9C28FBDFC96AD7B203F8CC4E6BF',
 	password_salt = E'\\x00000000000000000000000000000000',

@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
--- Dumped from database version 9.6.20
+-- Dumped from database version 9.6.22
 -- Dumped by pg_dump version 10.3
 
 SET statement_timeout = 0;
@@ -8188,15 +8188,18 @@ CREATE FUNCTION social.get_notification_posts_v1(user_id bigint, page_number int
 			get_notification_posts_v1.page_size
 	)
 	SELECT
-		(
-			SELECT
-				array_agg(
-					(paginated_post.comment_id, paginated_post.silent_post_id)::social.post_reference
-					ORDER BY
-						paginated_post.date_created DESC
-				)
-			FROM
-				paginated_post
+		coalesce(
+			(
+				SELECT
+					array_agg(
+						(paginated_post.comment_id, paginated_post.silent_post_id)::social.post_reference
+						ORDER BY
+							paginated_post.date_created DESC
+					)
+				FROM
+					paginated_post
+			),
+			ARRAY[]::social.post_reference[]
 		),
 		(
 			SELECT
@@ -8455,15 +8458,18 @@ CREATE FUNCTION social.get_posts_from_followees_v1(user_id bigint, page_number i
 			get_posts_from_followees_v1.page_size
 	)
     SELECT
-		(
-			SELECT
-				array_agg(
-					(paginated_post.comment_id, paginated_post.silent_post_id)::social.post_reference
-					ORDER BY
-						paginated_post.date_created DESC
-				)
-			FROM
-				paginated_post
+		coalesce(
+			(
+				SELECT
+					array_agg(
+						(paginated_post.comment_id, paginated_post.silent_post_id)::social.post_reference
+						ORDER BY
+							paginated_post.date_created DESC
+					)
+				FROM
+					paginated_post
+			),
+			ARRAY[]::social.post_reference[]
 		),
 		(
 		    SELECT
@@ -8629,15 +8635,18 @@ CREATE FUNCTION social.get_posts_from_inbox_v1(user_id bigint, page_number integ
 			get_posts_from_inbox_v1.page_size
 	)
     SELECT
-		(
-			SELECT
-				array_agg(
-					(paginated_inbox_comment.id, NULL::bigint)::social.post_reference
-					ORDER BY
-						paginated_inbox_comment.date_created DESC
-				)
-			FROM
-				paginated_inbox_comment
+		coalesce(
+			(
+				SELECT
+					array_agg(
+						(paginated_inbox_comment.id, NULL::bigint)::social.post_reference
+						ORDER BY
+							paginated_inbox_comment.date_created DESC
+					)
+				FROM
+					paginated_inbox_comment
+			),
+			ARRAY[]::social.post_reference[]
 		),
 		(
 		    SELECT
@@ -8684,15 +8693,18 @@ CREATE FUNCTION social.get_posts_from_user(subject_user_name text, page_size int
 			get_posts_from_user.page_size
 	)
     SELECT
-		(
-			SELECT
-				array_agg(
-					(user_post.comment_id, user_post.silent_post_id)::social.post_reference
-					ORDER BY
-						user_post.date_created DESC
-				)
-			FROM
-				user_post
+		coalesce(
+			(
+				SELECT
+					array_agg(
+						(user_post.comment_id, user_post.silent_post_id)::social.post_reference
+						ORDER BY
+							user_post.date_created DESC
+					)
+				FROM
+					user_post
+			),
+			ARRAY[]::social.post_reference[]
 		),
 		(
 		    SELECT
@@ -8962,15 +8974,18 @@ CREATE FUNCTION social.get_reply_posts_v1(user_id bigint, page_number integer, p
 			get_reply_posts_v1.page_size
 	)
     SELECT
-		(
-			SELECT
-				array_agg(
-					(paginated_reply.id, NULL::bigint)::social.post_reference
-					ORDER BY
-						paginated_reply.date_created DESC
-				)
-			FROM
-				paginated_reply
+		coalesce(
+			(
+				SELECT
+					array_agg(
+						(paginated_reply.id, NULL::bigint)::social.post_reference
+						ORDER BY
+							paginated_reply.date_created DESC
+					)
+				FROM
+					paginated_reply
+			),
+			ARRAY[]::social.post_reference[]
 		),
 		(
 		    SELECT

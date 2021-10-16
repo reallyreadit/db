@@ -427,6 +427,25 @@ CREATE TYPE core.display_theme AS ENUM (
 
 
 --
+-- Name: free_trial_credit_trigger; Type: TYPE; Schema: core; Owner: -
+--
+
+CREATE TYPE core.free_trial_credit_trigger AS ENUM (
+    'account_created',
+    'promo_tweet_intended'
+);
+
+
+--
+-- Name: free_trial_credit_type; Type: TYPE; Schema: core; Owner: -
+--
+
+CREATE TYPE core.free_trial_credit_type AS ENUM (
+    'article_view'
+);
+
+
+--
 -- Name: iso_alpha_2_country_code; Type: DOMAIN; Schema: core; Owner: -
 --
 
@@ -922,6 +941,18 @@ CREATE TYPE subscriptions.author_earnings_report_line_item AS (
 	minutes_read integer,
 	amount_earned integer,
 	amount_paid integer
+);
+
+
+--
+-- Name: free_trial_article_view; Type: TYPE; Schema: subscriptions; Owner: -
+--
+
+CREATE TYPE subscriptions.free_trial_article_view AS (
+	article_id bigint,
+	article_slug text,
+	date_viewed timestamp without time zone,
+	free_trial_credit_id bigint
 );
 
 
@@ -2397,7 +2428,8 @@ CREATE TABLE core.provisional_user_article (
     words_read integer DEFAULT 0 NOT NULL,
     date_completed timestamp without time zone,
     readable_word_count integer NOT NULL,
-    analytics jsonb
+    analytics jsonb,
+    date_viewed timestamp without time zone
 );
 
 
@@ -2429,6 +2461,41 @@ $$;
 
 
 --
+-- Name: create_provisional_user_article(bigint, bigint, integer, boolean, text); Type: FUNCTION; Schema: article_api; Owner: -
+--
+
+CREATE FUNCTION article_api.create_provisional_user_article(article_id bigint, provisional_user_account_id bigint, readable_word_count integer, mark_as_viewed boolean, analytics text) RETURNS core.provisional_user_article
+    LANGUAGE sql
+    AS $$
+	INSERT INTO
+		core.provisional_user_article (
+			article_id,
+			provisional_user_account_id,
+			read_state,
+			readable_word_count,
+			date_viewed,
+			analytics
+		)
+	VALUES (
+		create_provisional_user_article.article_id,
+		create_provisional_user_article.provisional_user_account_id,
+		ARRAY[-create_provisional_user_article.readable_word_count],
+		create_provisional_user_article.readable_word_count,
+		CASE WHEN
+			create_provisional_user_article.mark_as_viewed
+		THEN
+			core.utc_now()
+		ELSE
+			NULL::timestamp
+		END,
+		create_provisional_user_article.analytics::jsonb
+	)
+	RETURNING
+	    *;
+$$;
+
+
+--
 -- Name: create_source(text, text, text, text); Type: FUNCTION; Schema: article_api; Owner: -
 --
 
@@ -2453,7 +2520,9 @@ CREATE TABLE core.user_article (
     words_read integer DEFAULT 0 NOT NULL,
     date_completed timestamp without time zone,
     readable_word_count integer NOT NULL,
-    analytics jsonb
+    analytics jsonb,
+    date_viewed timestamp without time zone,
+    free_trial_credit_id bigint
 );
 
 
@@ -2479,6 +2548,57 @@ CREATE FUNCTION article_api.create_user_article(article_id bigint, user_account_
 	    create_user_article.analytics::json
 	)
 	RETURNING *;
+$$;
+
+
+--
+-- Name: create_user_article(bigint, bigint, integer, boolean, text); Type: FUNCTION; Schema: article_api; Owner: -
+--
+
+CREATE FUNCTION article_api.create_user_article(article_id bigint, user_account_id bigint, readable_word_count integer, mark_as_viewed boolean, analytics text) RETURNS core.user_article
+    LANGUAGE plpgsql
+    AS $$
+<<locals>>
+DECLARE
+	new_user_article core.user_article;
+BEGIN
+	-- Create the new user_article without setting date_viewed.
+	INSERT INTO
+		core.user_article (
+			article_id,
+			user_account_id,
+			read_state,
+			readable_word_count,
+			analytics
+		)
+	VALUES (
+		create_user_article.article_id,
+		create_user_article.user_account_id,
+		ARRAY[-create_user_article.readable_word_count],
+		create_user_article.readable_word_count,
+		create_user_article.analytics::jsonb
+	)
+	RETURNING
+		*
+	INTO
+		locals.new_user_article;
+	-- Try to mark as viewed if requested.
+	IF
+		create_user_article.mark_as_viewed
+	THEN
+		SELECT
+			*
+		INTO
+			locals.new_user_article
+		FROM
+			articles.mark_user_article_as_viewed(
+				user_article_id := locals.new_user_article.id
+			);
+	END IF;
+	-- Return the user_article.
+	RETURN
+		locals.new_user_article;
+END;
 $$;
 
 
@@ -3677,25 +3797,14 @@ BEGIN
 	    user_article.id = update_read_progress.user_article_id
 	FOR UPDATE;
 	-- check if the user is allowed to read
-	IF (
-		SELECT
-			user_account.date_created >= '2021-05-06T04:00:00' AND
-			(
-				user_account.subscription_end_date IS NULL OR
-				user_account.subscription_end_date <= locals.utc_now
-			)
-		FROM
-			core.user_account
-		WHERE
-			user_account.id = locals.current_user_article.user_account_id
-	) AND (
-		SELECT
-			article.source_id != 48542 -- readup blog
-		FROM
-			core.article
-		WHERE
-			article.id = current_user_article.article_id
-	)
+	IF
+		locals.current_user_article.free_trial_credit_id IS NULL AND
+		NOT subscriptions.is_user_subscribed_or_free_for_life(
+			user_account_id := locals.current_user_article.user_account_id
+		) AND
+		NOT subscriptions.is_article_free_to_read(
+			article_id := locals.current_user_article.article_id
+		)
 	THEN
 		RAISE EXCEPTION
 			'Subscription required.'
@@ -4270,6 +4379,104 @@ CREATE FUNCTION articles.get_starred_articles(user_account_id bigint, page_numbe
 			FROM
 				starred_article
 		);
+$$;
+
+
+--
+-- Name: mark_user_article_as_viewed(bigint); Type: FUNCTION; Schema: articles; Owner: -
+--
+
+CREATE FUNCTION articles.mark_user_article_as_viewed(user_article_id bigint) RETURNS SETOF core.user_article
+    LANGUAGE plpgsql
+    AS $$
+<<locals>>
+DECLARE
+	target_user_article core.user_article;
+	article_view_free_credit core.free_trial_credit;
+BEGIN
+	-- Query, cache, and lock the user article.
+	SELECT
+		user_article.*
+	INTO
+		locals.target_user_article
+	FROM
+		core.user_article
+	WHERE
+		user_article.id = mark_user_article_as_viewed.user_article_id
+	FOR UPDATE;
+	-- Return immediately without updating if the article has already been marked as viewed.
+	IF
+		locals.target_user_article.date_viewed IS NOT NULL
+	THEN
+		RETURN NEXT
+			locals.target_user_article;
+		RETURN;
+	END IF;
+	-- Set date_viewed and return immediately if the user is allowed to view the article based on their subscription or
+	-- free-for-life status.
+	IF
+		subscriptions.is_user_subscribed_or_free_for_life(
+			user_account_id := locals.target_user_article.user_account_id
+		) OR
+		subscriptions.is_article_free_to_read(
+			article_id := locals.target_user_article.article_id
+		)
+	THEN
+		RETURN QUERY
+		UPDATE
+			core.user_article
+		SET
+			date_viewed = core.utc_now()
+		WHERE
+			user_article.id = locals.target_user_article.id
+		RETURNING
+			*;
+		RETURN;
+	END IF;
+	-- Query, cache, and lock any available free view credits that the user might have.
+	SELECT
+		credit.*
+	INTO
+		locals.article_view_free_credit
+	FROM
+		core.free_trial_credit AS credit
+	WHERE
+		credit.user_account_id = locals.target_user_article.user_account_id AND
+		credit.credit_type = 'article_view'::core.free_trial_credit_type AND
+		credit.amount_remaining > 0
+	ORDER BY
+		credit.date_created
+	LIMIT
+		1
+	FOR UPDATE;
+	-- Check for available free view credits.
+	IF
+		NOT (locals.article_view_free_credit IS NULL)
+	THEN
+		-- Subtract one view from the available credit.
+		UPDATE
+			core.free_trial_credit
+		SET
+			amount_remaining = locals.article_view_free_credit.amount_remaining - 1
+		WHERE
+			free_trial_credit.id = locals.article_view_free_credit.id;
+		-- Set date_viewed, reference the free_trial_credit that was utilized, and return immediately.
+		RETURN QUERY
+		UPDATE
+			core.user_article
+		SET
+			date_viewed = core.utc_now(),
+			free_trial_credit_id = locals.article_view_free_credit.id
+		WHERE
+			user_article.id = locals.target_user_article.id
+		RETURNING
+			*;
+		RETURN;
+	END IF;
+	-- Return without updating if the user doesn't have any free article view credits to use.
+	RETURN NEXT
+		locals.target_user_article;
+END;
 $$;
 
 
@@ -10634,6 +10841,50 @@ $$;
 
 
 --
+-- Name: free_trial_credit; Type: TABLE; Schema: core; Owner: -
+--
+
+CREATE TABLE core.free_trial_credit (
+    id bigint NOT NULL,
+    date_created timestamp without time zone NOT NULL,
+    user_account_id bigint NOT NULL,
+    credit_trigger core.free_trial_credit_trigger NOT NULL,
+    credit_type core.free_trial_credit_type NOT NULL,
+    amount_credited integer NOT NULL,
+    amount_remaining integer NOT NULL
+);
+
+
+--
+-- Name: create_free_trial_credit(bigint, text, text, integer); Type: FUNCTION; Schema: subscriptions; Owner: -
+--
+
+CREATE FUNCTION subscriptions.create_free_trial_credit(user_account_id bigint, credit_trigger text, credit_type text, credit_amount integer) RETURNS SETOF core.free_trial_credit
+    LANGUAGE sql
+    AS $$
+	INSERT INTO
+		core.free_trial_credit (
+			date_created,
+			user_account_id,
+			credit_trigger,
+			credit_type,
+			amount_credited,
+			amount_remaining
+		)
+	VALUES (
+		core.utc_now(),
+		create_free_trial_credit.user_account_id,
+		create_free_trial_credit.credit_trigger::core.free_trial_credit_trigger,
+		create_free_trial_credit.credit_type::core.free_trial_credit_type,
+		create_free_trial_credit.credit_amount,
+		create_free_trial_credit.credit_amount
+	)
+	RETURNING
+		*;
+$$;
+
+
+--
 -- Name: subscription; Type: TABLE; Schema: core; Owner: -
 --
 
@@ -11241,6 +11492,45 @@ $$;
 
 
 --
+-- Name: get_free_article_views_for_user_account(bigint); Type: FUNCTION; Schema: subscriptions; Owner: -
+--
+
+CREATE FUNCTION subscriptions.get_free_article_views_for_user_account(user_account_id bigint) RETURNS SETOF subscriptions.free_trial_article_view
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT
+		user_article.article_id,
+		article.slug,
+		user_article.date_viewed,
+		user_article.free_trial_credit_id
+	FROM
+		core.user_article
+		JOIN
+			core.article ON
+				user_article.article_id = article.id
+	WHERE
+		user_article.user_account_id = get_free_article_views_for_user_account.user_account_id AND
+		user_article.free_trial_credit_id IS NOT NULL;
+$$;
+
+
+--
+-- Name: get_free_trial_credits_for_user_account(bigint); Type: FUNCTION; Schema: subscriptions; Owner: -
+--
+
+CREATE FUNCTION subscriptions.get_free_trial_credits_for_user_account(user_account_id bigint) RETURNS SETOF core.free_trial_credit
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT
+		free_trial_credit.*
+	FROM
+		core.free_trial_credit
+	WHERE
+		free_trial_credit.user_account_id = get_free_trial_credits_for_user_account.user_account_id;
+$$;
+
+
+--
 -- Name: get_payment_method(text, text); Type: FUNCTION; Schema: subscriptions; Owner: -
 --
 
@@ -11369,6 +11659,42 @@ CREATE FUNCTION subscriptions.get_subscription_statuses_for_user_account(user_ac
 		subscriptions.subscription_status AS status
 	WHERE
 		status.user_account_id = get_subscription_statuses_for_user_account.user_account_id;
+$$;
+
+
+--
+-- Name: is_article_free_to_read(bigint); Type: FUNCTION; Schema: subscriptions; Owner: -
+--
+
+CREATE FUNCTION subscriptions.is_article_free_to_read(article_id bigint) RETURNS boolean
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT
+		article.source_id = 48542 -- readup blog
+	FROM
+		core.article
+	WHERE
+		article.id = is_article_free_to_read.article_id;
+$$;
+
+
+--
+-- Name: is_user_subscribed_or_free_for_life(bigint); Type: FUNCTION; Schema: subscriptions; Owner: -
+--
+
+CREATE FUNCTION subscriptions.is_user_subscribed_or_free_for_life(user_account_id bigint) RETURNS boolean
+    LANGUAGE sql STABLE
+    AS $$
+	SELECT
+		user_account.date_created < '2021-05-06T04:00:00' OR
+		(
+			user_account.subscription_end_date IS NOT NULL AND
+			user_account.subscription_end_date > core.utc_now()
+		)
+	FROM
+		core.user_account
+	WHERE
+		user_account.id = is_user_subscribed_or_free_for_life.user_account_id;
 $$;
 
 
@@ -12513,6 +12839,14 @@ BEGIN
                 hide_links => TRUE
             );
     END IF;
+    -- assign initial free trial credits
+    PERFORM
+    	subscriptions.create_free_trial_credit(
+    		user_account_id => locals.new_user.id,
+    		credit_trigger => 'account_created'::core.free_trial_credit_trigger::text,
+    		credit_type => 'article_view'::core.free_trial_credit_type::text,
+    		credit_amount => 5
+    	);
     -- return user
     RETURN NEXT
         locals.new_user;
@@ -12995,6 +13329,7 @@ BEGIN
             words_read,
             date_completed,
             readable_word_count,
+            date_viewed,
             analytics
         )
     SELECT
@@ -13006,6 +13341,7 @@ BEGIN
         provisional_user_article.words_read,
         provisional_user_article.date_completed,
         provisional_user_article.readable_word_count,
+        provisional_user_article.date_viewed,
         provisional_user_article.analytics
     FROM
         core.provisional_user_article
@@ -14145,6 +14481,25 @@ ALTER SEQUENCE core.following_id_seq OWNED BY core.following.id;
 
 
 --
+-- Name: free_trial_credit_id_seq; Type: SEQUENCE; Schema: core; Owner: -
+--
+
+CREATE SEQUENCE core.free_trial_credit_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: free_trial_credit_id_seq; Type: SEQUENCE OWNED BY; Schema: core; Owner: -
+--
+
+ALTER SEQUENCE core.free_trial_credit_id_seq OWNED BY core.free_trial_credit.id;
+
+
+--
 -- Name: new_platform_notification_request; Type: TABLE; Schema: core; Owner: -
 --
 
@@ -15069,6 +15424,13 @@ ALTER TABLE ONLY core.following ALTER COLUMN id SET DEFAULT nextval('core.follow
 
 
 --
+-- Name: free_trial_credit id; Type: DEFAULT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.free_trial_credit ALTER COLUMN id SET DEFAULT nextval('core.free_trial_credit_id_seq'::regclass);
+
+
+--
 -- Name: new_platform_notification_request id; Type: DEFAULT; Schema: core; Owner: -
 --
 
@@ -15565,6 +15927,22 @@ ALTER TABLE ONLY core.extension_removal
 
 ALTER TABLE ONLY core.following
     ADD CONSTRAINT following_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: free_trial_credit free_trial_credit_pkey; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.free_trial_credit
+    ADD CONSTRAINT free_trial_credit_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: free_trial_credit free_trial_credit_user_account_credit_limit_idx; Type: CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.free_trial_credit
+    ADD CONSTRAINT free_trial_credit_user_account_credit_limit_idx UNIQUE (user_account_id, credit_trigger);
 
 
 --
@@ -16591,6 +16969,14 @@ ALTER TABLE ONLY core.following
 
 
 --
+-- Name: free_trial_credit free_trial_credit_user_account_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.free_trial_credit
+    ADD CONSTRAINT free_trial_credit_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
+
+
+--
 -- Name: notification_data notification_data_article_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
 --
 
@@ -17012,6 +17398,14 @@ ALTER TABLE ONLY core.user_account
 
 ALTER TABLE ONLY core.user_article
     ADD CONSTRAINT user_article_article_id_fkey FOREIGN KEY (article_id) REFERENCES core.article(id);
+
+
+--
+-- Name: user_article user_article_free_trial_credit_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.user_article
+    ADD CONSTRAINT user_article_free_trial_credit_id_fkey FOREIGN KEY (free_trial_credit_id) REFERENCES core.free_trial_credit(id);
 
 
 --

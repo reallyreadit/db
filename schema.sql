@@ -684,6 +684,17 @@ CREATE TYPE notifications.alert_dispatch AS (
 
 
 --
+-- Name: bulk_email_subscription_status_filter; Type: TYPE; Schema: notifications; Owner: -
+--
+
+CREATE TYPE notifications.bulk_email_subscription_status_filter AS ENUM (
+    'currently_subscribed',
+    'not_currently_subscribed',
+    'never_subscribed'
+);
+
+
+--
 -- Name: comment_addendum; Type: TYPE; Schema: social; Owner: -
 --
 
@@ -6154,6 +6165,148 @@ $$;
 
 
 --
+-- Name: create_company_update_notifications(bigint, text, text, text, boolean); Type: FUNCTION; Schema: notifications; Owner: -
+--
+
+CREATE FUNCTION notifications.create_company_update_notifications(author_id bigint, subject text, body text, subscription_status_filter text, free_for_life_filter boolean) RETURNS SETOF notifications.email_dispatch
+    LANGUAGE sql
+    AS $$
+	WITH recipient AS (
+		SELECT
+			user_account.id AS user_account_id
+		FROM
+			core.user_account
+			JOIN
+				notifications.current_preference ON
+					user_account.id = current_preference.user_account_id
+			LEFT JOIN
+				core.subscription_account ON
+					user_account.id = subscription_account.user_account_id
+			LEFT JOIN
+				core.subscription ON
+					subscription_account.provider = subscription.provider AND
+					subscription_account.provider_account_id = subscription.provider_account_id
+			LEFT JOIN
+				core.subscription_period ON
+					subscription.provider = subscription_period.provider AND
+					subscription.provider_subscription_id = subscription_period.provider_subscription_id
+		WHERE
+			current_preference.company_update_via_email AND
+			CASE
+				create_company_update_notifications.subscription_status_filter::notifications.bulk_email_subscription_status_filter
+			WHEN
+				'currently_subscribed'::notifications.bulk_email_subscription_status_filter
+			THEN
+				subscriptions.is_user_subscribed(
+					user_account := user_account,
+					as_of_date := core.utc_now()
+				)
+			WHEN
+				'not_currently_subscribed'::notifications.bulk_email_subscription_status_filter
+			THEN
+				NOT subscriptions.is_user_subscribed(
+					user_account := user_account,
+					as_of_date := core.utc_now()
+				)
+			ELSE
+				TRUE
+			END AND
+			CASE
+				create_company_update_notifications.free_for_life_filter
+			WHEN
+				TRUE
+			THEN
+				subscriptions.is_user_free_for_life(
+					user_account := user_account
+				)
+			WHEN
+				FALSE
+			THEN
+				NOT subscriptions.is_user_free_for_life(
+					user_account := user_account
+				)
+			ELSE
+				TRUE
+			END
+		GROUP BY
+			user_account.id
+		HAVING
+			CASE
+				create_company_update_notifications.subscription_status_filter::notifications.bulk_email_subscription_status_filter
+			WHEN
+				'never_subscribed'::notifications.bulk_email_subscription_status_filter
+			THEN
+				every(subscription_period.payment_status IS DISTINCT FROM 'succeeded'::core.subscription_payment_status)
+			ELSE
+				TRUE
+			END
+	),
+	update_event AS (
+		INSERT INTO
+			core.notification_event (
+				type,
+				bulk_email_author_id,
+				bulk_email_subject,
+				bulk_email_body,
+				bulk_email_subscription_status_filter,
+				bulk_email_free_for_life_filter
+			)
+		SELECT
+			'company_update',
+			create_company_update_notifications.author_id,
+			create_company_update_notifications.subject,
+			create_company_update_notifications.body,
+			create_company_update_notifications.subscription_status_filter::notifications.bulk_email_subscription_status_filter,
+			create_company_update_notifications.free_for_life_filter
+		FROM
+			recipient
+		LIMIT
+			1
+		RETURNING
+			id
+	),
+	receipt AS (
+		INSERT INTO
+			core.notification_receipt (
+				event_id,
+				user_account_id,
+				via_email,
+				via_extension,
+				via_push,
+				event_type
+			)
+		SELECT
+			(
+				SELECT
+					update_event.id
+				FROM
+					update_event
+			),
+			recipient.user_account_id,
+			TRUE,
+			FALSE,
+			FALSE,
+			'company_update'::core.notification_event_type
+		FROM
+			recipient
+		RETURNING
+			id,
+			user_account_id
+	)
+	SELECT
+		receipt.id,
+		user_account.id,
+		user_account.name,
+		user_account.email
+	FROM
+		receipt
+		JOIN
+			core.user_account ON
+				user_account.id = receipt.user_account_id;
+$$;
+
+
+--
 -- Name: create_email_notification(text, text, text, text); Type: FUNCTION; Schema: notifications; Owner: -
 --
 
@@ -7443,7 +7596,7 @@ $$;
 -- Name: get_bulk_mailings(); Type: FUNCTION; Schema: notifications; Owner: -
 --
 
-CREATE FUNCTION notifications.get_bulk_mailings() RETURNS TABLE(id bigint, date_sent timestamp without time zone, subject text, body text, type core.notification_event_type, user_account text, recipient_count bigint)
+CREATE FUNCTION notifications.get_bulk_mailings() RETURNS TABLE(id bigint, date_sent timestamp without time zone, subject text, body text, type core.notification_event_type, subscription_status_filter notifications.bulk_email_subscription_status_filter, free_for_life_filter boolean, user_account text, recipient_count bigint)
     LANGUAGE sql
     AS $$
 	SELECT
@@ -7452,14 +7605,21 @@ CREATE FUNCTION notifications.get_bulk_mailings() RETURNS TABLE(id bigint, date_
 		event.bulk_email_subject,
 		event.bulk_email_body,
 		event.type,
+		event.bulk_email_subscription_status_filter,
+		event.bulk_email_free_for_life_filter,
 		user_account.name AS user_account,
 		count(*) AS recipient_count
 	FROM
-		notification_event AS event
-		JOIN user_account ON user_account.id = event.bulk_email_author_id
-		JOIN notification_receipt ON notification_receipt.event_id = event.id
+		core.notification_event AS event
+		JOIN
+			core.user_account ON
+				event.bulk_email_author_id = core.user_account.id
+		JOIN
+			core.notification_receipt ON
+				event.id = notification_receipt.event_id
 	GROUP BY
-		event.id, user_account.id;
+		event.id,
+		user_account.id;
 $$;
 
 
@@ -11679,6 +11839,31 @@ $$;
 
 
 --
+-- Name: is_user_free_for_life(core.user_account); Type: FUNCTION; Schema: subscriptions; Owner: -
+--
+
+CREATE FUNCTION subscriptions.is_user_free_for_life(user_account core.user_account) RETURNS boolean
+    LANGUAGE sql IMMUTABLE
+    AS $$
+	SELECT
+		is_user_free_for_life.user_account.date_created < '2021-05-06T04:00:00';
+$$;
+
+
+--
+-- Name: is_user_subscribed(core.user_account, timestamp without time zone); Type: FUNCTION; Schema: subscriptions; Owner: -
+--
+
+CREATE FUNCTION subscriptions.is_user_subscribed(user_account core.user_account, as_of_date timestamp without time zone) RETURNS boolean
+    LANGUAGE sql IMMUTABLE
+    AS $$
+	SELECT
+		is_user_subscribed.user_account.subscription_end_date IS NOT NULL AND
+		is_user_subscribed.user_account.subscription_end_date > is_user_subscribed.as_of_date;
+$$;
+
+
+--
 -- Name: is_user_subscribed_or_free_for_life(bigint); Type: FUNCTION; Schema: subscriptions; Owner: -
 --
 
@@ -11686,10 +11871,12 @@ CREATE FUNCTION subscriptions.is_user_subscribed_or_free_for_life(user_account_i
     LANGUAGE sql STABLE
     AS $$
 	SELECT
-		user_account.date_created < '2021-05-06T04:00:00' OR
-		(
-			user_account.subscription_end_date IS NOT NULL AND
-			user_account.subscription_end_date > core.utc_now()
+		subscriptions.is_user_free_for_life(
+			user_account := user_account
+		) OR
+		subscriptions.is_user_subscribed(
+			user_account := user_account,
+			as_of_date := core.utc_now()
 		)
 	FROM
 		core.user_account
@@ -14577,7 +14764,9 @@ CREATE TABLE core.notification_event (
     type core.notification_event_type NOT NULL,
     bulk_email_author_id bigint,
     bulk_email_subject text,
-    bulk_email_body text
+    bulk_email_body text,
+    bulk_email_subscription_status_filter notifications.bulk_email_subscription_status_filter,
+    bulk_email_free_for_life_filter boolean
 );
 
 

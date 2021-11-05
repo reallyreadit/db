@@ -17650,6 +17650,14 @@ ALTER TABLE ONLY core.subscription_payment_method_version
 
 
 --
+-- Name: subscription_period_author_distribution subscription_period_author_distribution_author_id_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
+--
+
+ALTER TABLE ONLY core.subscription_period_author_distribution
+    ADD CONSTRAINT subscription_period_author_distribution_author_id_fkey FOREIGN KEY (author_id) REFERENCES core.author(id);
+
+
+--
 -- Name: subscription_period_author_distribution subscription_period_author_distribution_distribution_fkey; Type: FK CONSTRAINT; Schema: core; Owner: -
 --
 

@@ -505,6 +505,7 @@ CREATE TYPE core.notification_event_frequency AS ENUM (
 
 CREATE TYPE core.notification_event_type AS ENUM (
     'welcome',
+    'free_trial_completion',
     'initial_subscription',
     'email_confirmation',
     'email_confirmation_reminder',
@@ -16772,7 +16773,7 @@ CREATE UNIQUE INDEX following_follower_user_account_id_followee_user_account_id_
 -- Name: notification_event_duplicate_user_account_event_idx; Type: INDEX; Schema: core; Owner: -
 --
 
-CREATE UNIQUE INDEX notification_event_duplicate_user_account_event_idx ON core.notification_receipt USING btree (user_account_id, event_type) WHERE (event_type = 'initial_subscription'::core.notification_event_type);
+CREATE UNIQUE INDEX notification_event_duplicate_user_account_event_idx ON core.notification_receipt USING btree (user_account_id, event_type) WHERE (event_type = ANY (ARRAY['free_trial_completion'::core.notification_event_type, 'initial_subscription'::core.notification_event_type]));
 
 
 --

@@ -3,3 +3,6 @@
 *.tar
 *.tar.part
 *.gpg
+
+# avoid commiting .env files
+.env

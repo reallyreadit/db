@@ -19,7 +19,31 @@
 4. Add the PostgreSQL `bin` directory to your path for easy access to the command line utility `psql`.
     ```
     export PATH=$PATH:/Library/PostgreSQL/14/bin
-    ```
+
+### With Docker (WIP)
+
+These instructions only help set up the database:
+```bash
+# 1. Build the docker image for your architecture
+
+## For amd64
+docker build -t readup-db .
+
+## For arm64 (M1 Macs)
+docker build --file Dockerfile.aarch64 -t readup-db .
+
+# Place your desired POSTGRES_PASSWORD in the .env file in the local directory
+
+# 2. Start a container
+# $(pwd):/host binds the local directory to the /host dir in the container, so I can access my database dumps.
+# Your database dumps directory might be different
+docker run -d --name readup-db --env-file ./.env -p 5432:5432 -v $(pwd):/host readup-db
+
+# 3. Import the database dump
+docker exec --user postgres readup-db pwsh /dev-scripts/restore.ps1 -DbName rrit -DumpFile /host/2022-01-28-thor-api_master_68ba8bf.tar
+
+```
+
 ## Usage Guide
 After you complete the Setup Guide your local PostgreSQL server will be up and running and will start automatically with your system. Next up you'll want to restore a database dump file which will create the Readup database and populate it with data.
 ### Restoring Database Dumps

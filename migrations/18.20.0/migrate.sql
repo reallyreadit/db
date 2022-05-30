@@ -8,13 +8,85 @@
 -- 
 -- You should have received a copy of the GNU Affero General Public License version 3 along with Foobar. If not, see <https://www.gnu.org/licenses/>.
 
--- Set final "free-for-life" cutoff date.
+-- Making Readup free to use!
+
+-- Don't assign free credits during account creation.
+CREATE OR REPLACE FUNCTION user_account_api.create_user_account(
+	name text,
+	email text,
+	password_hash bytea,
+	password_salt bytea,
+	time_zone_id bigint,
+	theme text,
+	analytics text
+)
+RETURNS
+	SETOF core.user_account
+LANGUAGE
+	plpgsql
+AS $$
+<<locals>>
+DECLARE
+    new_user core.user_account;
+BEGIN
+    -- create new user
+    INSERT INTO
+        core.user_account (
+            name,
+            email,
+            password_hash,
+            password_salt,
+            time_zone_id,
+            creation_analytics
+        )
+    VALUES
+        (
+            trim(
+                create_user_account.name
+            ),
+            trim(
+                create_user_account.email
+            ),
+            create_user_account.password_hash,
+            create_user_account.password_salt,
+            create_user_account.time_zone_id,
+            create_user_account.analytics::json
+        )
+    RETURNING
+        *
+    INTO
+        locals.new_user;
+    -- set initial notification preference
+    INSERT INTO
+        core.notification_preference (
+            user_account_id
+        )
+	VALUES (
+	    locals.new_user.id
+    );
+    -- set initial display preference if a theme is provided
+     IF create_user_account.theme IS NOT NULL THEN
+        PERFORM
+            user_account_api.set_display_preference(
+                user_account_id => locals.new_user.id,
+                theme => create_user_account.theme,
+                text_size => 1,
+                hide_links => TRUE
+            );
+    END IF;
+    -- return user
+    RETURN NEXT
+        locals.new_user;
+END;
+$$;
+
+-- Don't check if allowed to read before updating progress.
 CREATE OR REPLACE FUNCTION
 	article_api.update_read_progress(
 		user_article_id bigint,
 		read_state integer[],
 		analytics text
-)
+	)
 RETURNS
 	core.user_article
 LANGUAGE
@@ -48,32 +120,6 @@ BEGIN
 	WHERE
 	    user_article.id = update_read_progress.user_article_id
 	FOR UPDATE;
-	-- check if the user is allowed to read
-	IF (
-		SELECT
-			user_account.date_created >= '2021-05-06T04:00:00' AND
-			(
-				user_account.subscription_end_date IS NULL OR
-				user_account.subscription_end_date <= locals.utc_now
-			)
-		FROM
-			core.user_account
-		WHERE
-			user_account.id = locals.current_user_article.user_account_id
-	) AND (
-		SELECT
-			article.source_id != 48542 -- readup blog
-		FROM
-			core.article
-		WHERE
-			article.id = current_user_article.article_id
-	)
-	THEN
-		RAISE EXCEPTION
-			'Subscription required.'
-		USING
-			DETAIL = 'https://docs.readup.com/errors/reading/subscription-required';
-	END IF;
 	-- only update if more words have been read
 	IF locals.words_read > locals.current_user_article.words_read THEN
 	   	-- calculate the words read since the last commit

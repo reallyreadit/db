@@ -1,8 +1,18 @@
+-- Copyright (C) 2022 reallyread.it, inc.
+--
+-- This file is part of Readup.
+--
+-- Readup is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License version 3 as published by the Free Software Foundation.
+--
+-- Readup is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+--
+-- You should have received a copy of the GNU Affero General Public License version 3 along with Foobar. If not, see <https://www.gnu.org/licenses/>.
+
 --
 -- PostgreSQL database dump
 --
 
--- Dumped from database version 9.6.22
+-- Dumped from database version 9.6.23
 -- Dumped by pg_dump version 10.3
 
 SET statement_timeout = 0;
@@ -3808,21 +3818,6 @@ BEGIN
 	WHERE
 	    user_article.id = update_read_progress.user_article_id
 	FOR UPDATE;
-	-- check if the user is allowed to read
-	IF
-		locals.current_user_article.free_trial_credit_id IS NULL AND
-		NOT subscriptions.is_user_subscribed_or_free_for_life(
-			user_account_id := locals.current_user_article.user_account_id
-		) AND
-		NOT subscriptions.is_article_free_to_read(
-			article_id := locals.current_user_article.article_id
-		)
-	THEN
-		RAISE EXCEPTION
-			'Subscription required.'
-		USING
-			DETAIL = 'https://docs.readup.com/errors/reading/subscription-required';
-	END IF;
 	-- only update if more words have been read
 	IF locals.words_read > locals.current_user_article.words_read THEN
 	   	-- calculate the words read since the last commit
@@ -13294,14 +13289,6 @@ BEGIN
                 hide_links => TRUE
             );
     END IF;
-    -- assign initial free trial credits
-    PERFORM
-    	subscriptions.create_free_trial_credit(
-    		user_account_id => locals.new_user.id,
-    		credit_trigger => 'account_created'::core.free_trial_credit_trigger::text,
-    		credit_type => 'article_view'::core.free_trial_credit_type::text,
-    		credit_amount => 5
-    	);
     -- return user
     RETURN NEXT
         locals.new_user;

@@ -4,13 +4,6 @@
 
 FROM postgres:14
 
-# Copy maintenance scripts into the container
-COPY ./article-cleanup /article-cleanup
-COPY ./dev-scripts  /dev-scripts
-COPY ./migrations /migrations
-COPY ./reports /reports
-COPY ./source-rules /source-rules
-
 # Install Powershell for the current architecture.
 #
 # We need to use the binary archive installation method to support both aarch64 and amd64

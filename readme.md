@@ -1,5 +1,10 @@
 # reallyread.it db
-## Setup Guide
+
+## Setup with Docker
+
+See the [dev-env](https://github.com/reallyreadit/dev-env) instructions to set up this database as part of the Docker Compose project.
+
+## Manual Setup
 1. Install PostgreSQL 14: https://www.postgresql.org/download/
 
     The setup wizard will prompt you to create a password for the `postgres` superuser account. Since this is just a local development server you can just use `postgres` as the password so that it is easy to remember.
@@ -19,33 +24,11 @@
 4. Add the PostgreSQL `bin` directory to your path for easy access to the command line utility `psql`.
     ```
     export PATH=$PATH:/Library/PostgreSQL/14/bin
-
-### With Docker (WIP)
-
-These instructions only help set up the database:
-```bash
-# 1. Build the docker image for your architecture
-
-## For amd64
-docker build -t readup-db .
-
-## For arm64 (M1 Macs)
-docker build --file Dockerfile.aarch64 -t readup-db .
-
-# Place your desired POSTGRES_PASSWORD in the .env file in the local directory
-
-# 2. Start a container
-# $(pwd):/host binds the local directory to the /host dir in the container, so I can access my database dumps.
-# Your database dumps directory might be different
-docker run -d --name readup-db --env-file ./.env -p 5432:5432 -v $(pwd):/host readup-db
-
-# 3. Import the database dump
-docker exec --user postgres readup-db pwsh /dev-scripts/restore.ps1 -DbName rrit -DumpFile /host/2022-01-28-thor-api_master_68ba8bf.tar
-
-```
+    ```
 
 ## Usage Guide
 After you complete the Setup Guide your local PostgreSQL server will be up and running and will start automatically with your system. Next up you'll want to restore a database dump file which will create the Readup database and populate it with data.
+
 ### Restoring Database Dumps
 Restore a database dump any time you need to upgrade to a newer version of the Readup database or simply want to revert the Readup database to a clean slate. Any changes that have been made to the database since the last restore will be lost.
 
@@ -55,7 +38,16 @@ Run the following PowerShell script to restore a database dump, supplying the de
 - It is normal to receive a warning about a failure to refresh the materialized views. This is an issue with `pg_restore` and the materialized views will be refreshed manually before the script finishes.
 <!--end list-->
     pwsh dev-scripts/restore.ps1 -DbName rrit -DumpFile /Users/jeff/Downloads/2021-01-23-dev.tar
+
+When using a Docker db container, you can run the same command with `docker exec`. The default Docker Compose container maps this repository folder into `/db` on the container. Make sure to move your dump to this directory.
+
+    docker exec --user postgres readup_db_1 pwsh /db/dev-scripts/restore.ps1 -DbName rrit -DumpFile /db/2021-01-23-dev.tar
+
+## Subscriptions-related docs (deprecated)
+
+Subscriptions have been disabled in Readup since it became free again. See [the blog post](https://blog.readup.com/2022/05/23/announcing-a-free-and-open-source-readup.html) for context. Much of the related database code, schemas and scripts remained in place however.
 ### Creating Subscriptions
+
 Creating subscriptions using the Apple and Stripe test servers can be tedious and time-consuming. As an alternative you can use the following SQL scripts to create subscriptions directly in the database, bypassing the payment providers.
 
 Replace the variables (specified using the `-v` arguments) with appropriate values, noting the following:

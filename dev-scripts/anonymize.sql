@@ -193,6 +193,11 @@ WHERE
 	silent_post.id IS NULL;
 
 DELETE FROM
+	core.user_article AS public_article
+WHERE
+	public_article.date_created  < '2022-01-01';
+
+DELETE FROM
 	core.user_article_progress AS private_progress
 USING
 	core.user_article_progress AS progress

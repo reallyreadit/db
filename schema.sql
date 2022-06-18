@@ -1,19 +1,9 @@
--- Copyright (C) 2022 reallyread.it, inc.
---
--- This file is part of Readup.
---
--- Readup is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License version 3 as published by the Free Software Foundation.
---
--- Readup is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
---
--- You should have received a copy of the GNU Affero General Public License version 3 along with Foobar. If not, see <https://www.gnu.org/licenses/>.
-
 --
 -- PostgreSQL database dump
 --
 
--- Dumped from database version 9.6.23
--- Dumped by pg_dump version 10.3
+-- Dumped from database version 14.3 (Debian 14.3-1.pgdg110+1)
+-- Dumped by pg_dump version 14.3 (Debian 14.3-1.pgdg110+1)
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -22,6 +12,7 @@ SET client_encoding = 'UTF8';
 SET standard_conforming_strings = on;
 SELECT pg_catalog.set_config('search_path', '', false);
 SET check_function_bodies = false;
+SET xmloption = content;
 SET client_min_messages = warning;
 SET row_security = off;
 
@@ -100,20 +91,6 @@ CREATE SCHEMA subscriptions;
 --
 
 CREATE SCHEMA user_account_api;
-
-
---
--- Name: plpgsql; Type: EXTENSION; Schema: -; Owner: -
---
-
-CREATE EXTENSION IF NOT EXISTS plpgsql WITH SCHEMA pg_catalog;
-
-
---
--- Name: EXTENSION plpgsql; Type: COMMENT; Schema: -; Owner: -
---
-
-COMMENT ON EXTENSION plpgsql IS 'PL/pgSQL procedural language';
 
 
 --
@@ -1085,7 +1062,9 @@ CREATE TYPE subscriptions.subscription_status_latest_renewal_status_change AS (
 );
 
 
-SET default_with_oids = false;
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
 
 --
 -- Name: website_traffic_weekly_total; Type: TABLE; Schema: core; Owner: -
@@ -2159,7 +2138,7 @@ $$;
 CREATE FUNCTION core.utc_now() RETURNS timestamp without time zone
     LANGUAGE sql STABLE
     AS $$
-	SELECT local_now('UTC');
+	SELECT core.local_now('UTC');
 $$;
 
 
@@ -5629,8 +5608,8 @@ CREATE FUNCTION core.generate_local_timestamp_to_utc_range_series(start timestam
 	SELECT
 		local_timestamp,
 		tsrange(
-			local_to_utc_timestamp(local_timestamp, time_zone_name),
-			local_to_utc_timestamp(local_timestamp + step, time_zone_name)
+			core.local_to_utc_timestamp(local_timestamp, time_zone_name),
+			core.local_to_utc_timestamp(local_timestamp + step, time_zone_name)
 		) AS utc_range
 	FROM
     	generate_series(start, stop, step) AS local_timestamp;
@@ -9641,13 +9620,13 @@ CREATE FUNCTION stats.get_current_streak(user_account_id bigint) RETURNS stats.s
 		SELECT
 			name
 		FROM
-			time_zone
+			core.time_zone
 		WHERE
 			id = (
 				SELECT
 					time_zone_id
 				FROM
-					user_account
+					core.user_account
 				WHERE
 					id = get_current_streak.user_account_id
 			)
@@ -9667,17 +9646,17 @@ CREATE FUNCTION stats.get_current_streak(user_account_id bigint) RETURNS stats.s
 						local_timestamp,
 					    utc_range
 					FROM
-						generate_local_timestamp_to_utc_range_series(
-							start => (local_now((SELECT name FROM user_time_zone)) - '1 day'::interval)::date,
-							stop => local_now((SELECT name FROM user_time_zone))::date,
+						core.generate_local_timestamp_to_utc_range_series(
+							start => (core.local_now((SELECT name FROM user_time_zone)) - '1 day'::interval)::date,
+							stop => core.local_now((SELECT name FROM user_time_zone))::date,
 							step => '1 day'::interval,
 							time_zone_name => (SELECT name FROM user_time_zone)
 						)
 				) AS streak_start_day
-				LEFT JOIN user_article
+				LEFT JOIN core.user_article
 					ON (
-						user_article.user_account_id = get_current_streak.user_account_id AND
-						user_article.date_completed <@ streak_start_day.utc_range
+						core.user_article.user_account_id = get_current_streak.user_account_id AND
+						core.user_article.date_completed <@ streak_start_day.utc_range
 					)
 			GROUP BY
 				streak_start_day.local_timestamp,
@@ -9721,8 +9700,8 @@ CREATE FUNCTION stats.get_current_streak(user_account_id bigint) RETURNS stats.s
 					SELECT
 						(local_timestamp - '1 day'::interval)::date AS local_timestamp,
 						tsrange(
-							local_to_utc_timestamp(local_timestamp - '1 day'::interval, (SELECT name FROM user_time_zone)),
-							local_to_utc_timestamp(local_timestamp, (SELECT name FROM user_time_zone))
+							core.local_to_utc_timestamp(local_timestamp - '1 day'::interval, (SELECT name FROM user_time_zone)),
+							core.local_to_utc_timestamp(local_timestamp, (SELECT name FROM user_time_zone))
 						) AS utc_range
 					FROM
 						streak_day
@@ -9731,10 +9710,10 @@ CREATE FUNCTION stats.get_current_streak(user_account_id bigint) RETURNS stats.s
 					LIMIT
 						1
 				) AS next_day
-				JOIN user_article
+				JOIN core.user_article
 					ON (
-						user_article.user_account_id = get_current_streak.user_account_id AND
-						user_article.date_completed <@ next_day.utc_range
+						core.user_article.user_account_id = get_current_streak.user_account_id AND
+						core.user_article.date_completed <@ next_day.utc_range
 					)
 			GROUP BY
 				next_day.local_timestamp,
@@ -17884,13 +17863,6 @@ ALTER TABLE ONLY core.user_article_progress
 
 ALTER TABLE ONLY core.user_article
     ADD CONSTRAINT user_page_user_account_id_fkey FOREIGN KEY (user_account_id) REFERENCES core.user_account(id);
-
-
---
--- Name: current_streak; Type: MATERIALIZED VIEW DATA; Schema: stats; Owner: -
---
-
-REFRESH MATERIALIZED VIEW stats.current_streak;
 
 
 --

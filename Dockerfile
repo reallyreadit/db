@@ -20,3 +20,8 @@ RUN apt update && apt install -y curl \
 	&& chmod +x /opt/microsoft/powershell/7/pwsh \
 	# Create the symbolic link that points to pwsh
 	&& ln -s /opt/microsoft/powershell/7/pwsh /usr/bin/pwsh
+
+COPY ./docker-start.sh /usr/local/bin/docker-start.sh
+RUN chmod 751 /usr/local/bin/docker-start.sh
+
+ENTRYPOINT [ "docker-start.sh"]

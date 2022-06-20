@@ -32,6 +32,19 @@ After you complete the Setup Guide your local PostgreSQL server will be up and r
 ### Restoring Database Dumps
 Restore a database dump any time you need to upgrade to a newer version of the Readup database or simply want to revert the Readup database to a clean slate. Any changes that have been made to the database since the last restore will be lost.
 
+**Restoring sample seed data**
+
+Yu can restore a minimal seed database with `restore-sample.ps1`. This is also what the Docker container does on startup when you did not restore a database yet (see `docker-start.sh`).
+
+```
+pwsh dev-scripts/restore-sample.ps1 -DbName rrit
+```
+To learn how to generate new seed data (for example, to test something specific), read the [docs in the seed folder](seed/readme.md).
+
+**Restoring full database dumps**
+
+Note: this section is only relevant if you have access to a full or partial database dump. We don't publicly supply these dumps, they are meant for core developers. If you're not a core developer and want to contribute a PR, you can use the default seed sample data; see below.
+
 Run the following PowerShell script to restore a database dump, supplying the desired name for the database and the dump file. Note the following:
 - If there is an existing database with the same name it will be dropped before a new one is created.
 - The script cannot proceed if there are active connections to an existing database. If you receive the active connections notice then you may need to stop the `api` server or close any active connections from any other SQL clients you may have running.

@@ -7,6 +7,9 @@
 # Readup is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
 #
 # You should have received a copy of the GNU Affero General Public License version 3 along with Readup. If not, see <https://www.gnu.org/licenses/>.
+# -------------------------------------------------
+
+# Only restores the schema and timezone data. Useful to build a new seed dataset based off this.
 
 param (
 	[Parameter(Mandatory = $true)]
@@ -21,23 +24,22 @@ if (-not (Test-Path $DumpFile)) {
 	Exit
 }
 
-Write-Host 'Checking for active connections...'
-[int]$activeConnections = psql --no-align --tuples-only --command="SELECT count(*) FROM pg_stat_activity WHERE pg_stat_activity.datname = '$DbName'"
-if ($activeConnections -gt 0) {
-	Write-Host 'Close active connections and try again.'
-	Exit
-}
-
 Write-Host 'Dropping existing database...'
-psql --command="DROP DATABASE IF EXISTS $DbName"
+psql --command="DROP DATABASE IF EXISTS $DbName WITH (FORCE)"
 
 Write-Host 'Creating database...'
 psql --command="CREATE DATABASE $DbName"
-psql --dbname=$DbName --command="ALTER DATABASE $DbName SET search_path TO core"
 psql --dbname=$DbName --command='DROP SCHEMA public'
 
 Write-Host 'Restoring dump file...'
-pg_restore --dbname=$DbName --no-owner $DumpFile
+# .sql dumps can't be restored with pg_restore
+psql --dbname=$DbName -f $DumpFile
+psql --dbname=$DbName --command="ALTER DATABASE $DbName SET search_path TO core"
 
 Write-Host 'Refreshing materialized views...'
+# The -f $DumpFile will have already attempted this, but it will have failed because
+# the search path had not been set at that point. Retry after setting the search path.
 psql --dbname=$DbName --command='REFRESH MATERIALIZED VIEW stats.current_streak'
+
+Write-Host 'Seeding time zones'
+psql --dbname=$DbName --file=/db/seed/time-zone.sql

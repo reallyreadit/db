@@ -11,7 +11,7 @@ docker-entrypoint.sh postgres &
 while !</dev/tcp/db/5432; do sleep 1; done;
 
 # Seed the database with a sample database if it doesn't exist yet
-if [ "$( psql -XtAc "SELECT 1 FROM pg_database WHERE datname='rrit'" )" = '1' ];
+if [ $( su - postgres -c "psql -XtAc \"select count(datname) from pg_database where datname='rrit'\"") = '1' ];
 	then
 		echo "Database already exists"
 	else

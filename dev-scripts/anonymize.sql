@@ -55,7 +55,17 @@ TRUNCATE TABLE
 	-- delete legacy share result analytics
 	core.share_result,
 	-- delete star data (private)
-	core.star;
+	core.star,
+	-- delete use subscription data (authentication data)
+	core.subscription,
+	core.subscription_account,
+	core.subscription_default_payment_method,
+	core.subscription_payment_method,
+	core.subscription_payment_method_version,
+	core.subscription_period,
+	core.subscription_period_author_distribution,
+	core.subscription_period_distribution,
+	core.subscription_renewal_status_change;
 
 /*
 Insert required preferences with default values and disabling notifications.
